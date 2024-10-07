@@ -424,6 +424,7 @@ renderCUDA(
 							for (int v = u+1; v < pointer+1; v++){
 								neg_gaus_look_at_var[v-u-1] = neg_gaus_look_at_var[v];
 								neg_gaus_depths[v-u-1] = neg_gaus_depths[v];
+								neg_gaus_alpha_arr[v-u-1] = neg_gaus_alpha_arr[v];
 							}
 							pointer = pointer -u -1;
 							num_neg_gauss = pointer + 1;
