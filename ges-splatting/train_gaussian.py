@@ -25,6 +25,7 @@ from utils.extra_utils import random_id
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import wandb
+import cv2 # Code by lathika
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_to_wandb):
     first_iter = 0

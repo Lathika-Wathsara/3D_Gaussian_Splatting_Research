@@ -67,9 +67,10 @@ RasterizeGaussiansCUDA(
 
   torch::Tensor out_color = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
-  torch::Tensor unwanted_gauss = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));	                // Code by lathika
-  torch::Tensor depths = torch::empty({P}, means3D.options().device(torch::kCUDA).dtype(torch::kFloat32));	    // Code by lathika
-  torch::Tensor means_2D = torch::empty({P, 2}, means3D.options().device(torch::kCUDA).dtype(torch::kFloat32));	// Code by lathika
+  torch::Tensor unwanted_gauss = torch::full({P}, 0, means3D.options().dtype(torch::kInt32).device(torch::kCPU));   // Code by lathika - added .device(torch::kCPU) to shift to cpu. Change this if wants
+  //torch::Tensor depths = torch::empty({P}, means3D.options().device(torch::kCUDA).dtype(torch::kFloat32));	    // Code by lathika
+  torch::Tensor depths = torch::full({P},0.0, means3D.options().device(torch::kCUDA).dtype(torch::kFloat32));
+  torch::Tensor means_2D = torch::zeros({P, 2}, means3D.options().device(torch::kCUDA).dtype(torch::kFloat32));	   // Code by lathika
   
   torch::Device device(torch::kCUDA);
   torch::TensorOptions options(torch::kByte);
@@ -89,7 +90,7 @@ RasterizeGaussiansCUDA(
 		M = sh.size(1);
       }
 
-	  rendered = CudaRasterizer::Rasterizer::forward(
+	  rendered = CudaRasterizer::Rasterizer::forward(	
 	    geomFunc,
 		binningFunc,
 		imgFunc,
@@ -113,12 +114,12 @@ RasterizeGaussiansCUDA(
 		out_color.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
 		unwanted_gauss.contiguous().data<int>(),	// Code by lathika : Added this line
-		means_2D.contiguous().data<float2>(),		// Code by lathika : Added this line
+		means_2D.contiguous().data<float>(),		// Code by lathika : Added this line, use with causion. Not sure about reinterpret_cast part. Changed "reinterpret_cast<float2*>(means_2D.contiguous().data<float>())" into "means_2D.contiguous().data<float>()"
 		depths.contiguous().data<float>(),			// Code by lathika : Added this line
 		debug);
   }
 
-  return std::make_tuple(rendered, out_color, radii, unwanted_gauss, means_2D, depths, geomBuffer, binningBuffer, imgBuffer);	// Code by lathika : added "unwanted_gauss"
+  return std::make_tuple(rendered, out_color, radii, unwanted_gauss, means_2D, depths, geomBuffer, binningBuffer, imgBuffer);	// Code by lathika : added "unwanted_gauss,  means_2D, depths,"
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>

@@ -15,6 +15,15 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+
+// Code by lathika - test
+#include <iostream> // Required for std::cout
+#include <glm/glm.hpp>
+#include <glm/gtc/epsilon.hpp> // For glm::isnan
+#include <cmath> // For std::isnan
+
+
+
 // Backward pass for conversion of spherical harmonics to RGB for
 // each Gaussian.
 __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, const bool* clamped, const glm::vec3* dL_dcolor, glm::vec3* dL_dmeans, glm::vec3* dL_dshs)
@@ -271,6 +280,125 @@ __global__ void computeCov2DCUDA(int P,
 	// that is caused because the mean affects the covariance matrix.
 	// Additional mean gradient is accumulated in BACKWARD::preprocess.
 	dL_dmeans[idx] = dL_dmean;
+
+	// Code by lathika -  test
+	glm::bvec3 row1NaN = glm::bvec3(glm::isnan(Vrk[0][0]), glm::isnan(Vrk[0][1]), glm::isnan(Vrk[0][2]));
+	glm::bvec3 row2NaN = glm::bvec3(glm::isnan(Vrk[1][0]), glm::isnan(Vrk[1][1]), glm::isnan(Vrk[1][2]));
+	glm::bvec3 row3NaN = glm::bvec3(glm::isnan(Vrk[2][0]), glm::isnan(Vrk[2][1]), glm::isnan(Vrk[2][2]));
+
+	if (glm::any(row1NaN) || glm::any(row2NaN) || glm::any(row3NaN)) {
+		printf("Vrk has NaN\n");
+		return;
+	}
+	glm::bvec3 row1NaN1 = glm::bvec3(glm::isnan(T[0][0]), glm::isnan(T[0][1]), glm::isnan(T[0][2]));
+	glm::bvec3 row2NaN1 = glm::bvec3(glm::isnan(T[1][0]), glm::isnan(T[1][1]), glm::isnan(T[1][2]));
+	glm::bvec3 row3NaN1 = glm::bvec3(glm::isnan(T[2][0]), glm::isnan(T[2][1]), glm::isnan(T[2][2]));
+
+	if (glm::any(row1NaN1) || glm::any(row2NaN1) || glm::any(row3NaN1)) {
+		printf("T has NaN\n");
+		return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_da)))) {
+    printf("dL_da has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_db)))) {
+    printf("dL_db has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dc)))) {
+    printf("dL_dc has NaN\n");
+	return;
+	}
+
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT00)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT00 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT01)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT01 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT02)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT02 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT10)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT10 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT11)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT11 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dT12)))) {
+	printf("a: %.2f, b: %.2f, c: %.2f\n", a, b, c);
+    printf("denom: %.2f, denom2inv: %.2f\n", denom, denom2inv);
+    printf("dL_dconic_x: %.2f, dL_dconic_y: %.2f, dL_dconic_z: %.2f\n", dL_dconic.x, dL_dconic.y, dL_dconic.z);
+    printf("dL_da: %.2f, dL_dc: %.2f, dL_db: %.2f\n", dL_da, dL_dc, dL_db);
+    printf("T: %.2f %.2f %.2f %.2f %.2f %.2f\n", T[0][0], T[0][1], T[0][2], T[1][0], T[1][1], T[1][2]);
+    printf("Vrk: %.2f %.2f %.2f %.2f %.2f %.2f\n", Vrk[0][0], Vrk[0][1], Vrk[0][2], Vrk[1][1], Vrk[1][2], Vrk[2][2]);
+    printf("dL_dT12 has NaN\n");
+	return;
+	}
+
+	if (glm::any(glm::bvec1(glm::isnan(dL_dJ00)))) {
+    printf("dL_dJ00 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dJ02)))) {
+    printf("dL_dJ02 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dJ11)))) {
+    printf("dL_dJ11 has NaN\n");
+	return;
+	}
+	if (glm::any(glm::bvec1(glm::isnan(dL_dJ12)))) {
+    printf("dL_dJ12 has NaN\n");
+	return;
+	}
+	
+	glm::bvec3 isNaNVec_4 = glm::bvec3(glm::isnan(dL_dtx), glm::isnan(dL_dty), glm::isnan(dL_dtz));
+	if (glm::any(isNaNVec_4)) {
+    printf("dL_dt has NaN\n");
+    return;
+	}
+	glm::bvec3 isNaNVec = glm::bvec3(glm::isnan(dL_dmean.x), glm::isnan(dL_dmean.y), glm::isnan(dL_dmean.z));
+	if (glm::any(isNaNVec)) {
+    printf("dL_dmean has NaN\n");
+    return;
+	}
 }
 
 // Backward pass for the conversion of scale and rotation to a 
@@ -385,6 +513,12 @@ __global__ void preprocessCUDA(
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
 	dL_dmeans[idx] += dL_dmean;
+
+	// Code by lathika -  test
+	if (glm::any(glm::isnan(dL_dmean))==1){
+		printf( "dL_dmean has NaN: %d" , static_cast<int>(glm::any(glm::isnan(dL_dmean))) );
+		return ;
+	}
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)

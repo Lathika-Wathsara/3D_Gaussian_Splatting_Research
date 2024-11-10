@@ -3,6 +3,7 @@
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
  *
+
  * This software is free for non-commercial, research and evaluation use 
  * under the terms of the LICENSE.md file.
  *
@@ -29,6 +30,23 @@ namespace cg = cooperative_groups;
 #include "auxiliary.h"
 #include "forward.h"
 #include "backward.h"
+
+#include <torch/extension.h> // Code by lathika
+
+// Code by lathika - CUDA kernel to create the tensor
+__global__ void updateMeansKernet(const float2* means_2D_ptr, float* tensor_ptr, int P){
+	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (idx < P){
+		tensor_ptr[2*idx] = means_2D_ptr[idx].x;
+		tensor_ptr[2*idx + 1] = means_2D_ptr[idx].y;
+	}
+}
+void updateMeans(const float2* means_2D_ptr, float* tensor_ptr, int P){
+	int blockSize = 256;
+	int gridSize = (P + blockSize - 1)/ blockSize;
+	updateMeansKernet<<<gridSize, blockSize>>>(means_2D_ptr,tensor_ptr, P);
+	cudaDeviceSynchronize();
+}
 
 // Helper function to find the next-highest bit of the MSB
 // on the CPU.
@@ -220,7 +238,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	int* radii,
 	int* unwanted_gauss,	// Code by lathika
-	float2* means_2D,		// Code by lathika
+	float* means_2D,		// Code by lathika - then changed "float2* means_2D," into "float* means_2D,"
 	float* depths,			// Code by lathika
 	bool debug)
 {
@@ -232,20 +250,22 @@ int CudaRasterizer::Rasterizer::forward(
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
 
 	if (radii == nullptr)
-	{
+	{	
 		radii = geomState.internal_radii;
 	}
 
 	// Code by lathika
 	if (unwanted_gauss == nullptr)
-	{
+	{	
 		unwanted_gauss = geomState.internal_unwanted_gauss;
 	}
 
 	// Code by lathika
+	/*
 	if (means_2D == nullptr){
-		means_2D = geomState.means2D;
+		means_2D = geomState.means2D;	// Both means_2D and geomState.means2D have the type = P6float2
 	}
+	*/
 
 	// Code by lathika
 	if (depths == nullptr){
@@ -284,8 +304,8 @@ int CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		radii,
-		means_2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
-		depths,		// Code by lathika - changed "geomState.depths," into "depths"
+		geomState.means2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
+		geomState.depths,		// Code by lathika - changed "geomState.depths," into "depths"
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.look_at_var_arr,	// Code by lathika
@@ -311,8 +331,8 @@ int CudaRasterizer::Rasterizer::forward(
 	// and corresponding dublicated Gaussian indices to be sorted
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
 		P,
-		means_2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
-		depths,		// Code by lathika - changed "geomState.depths," into "depths"
+		geomState.means2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
+		geomState.depths,		// Code by lathika - changed "geomState.depths," into "depths"
 		geomState.point_offsets,
 		binningState.point_list_keys_unsorted,
 		binningState.point_list_unsorted,
@@ -342,15 +362,16 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+
 	CHECK_CUDA(FORWARD::render( P,	// Code by lathika
 		tile_grid, block,
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
-		means_2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
+		geomState.means2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
 		feature_ptr,
 		unwanted_gauss,	// Code by lathika
-		depths,		// Code by lathika - first added "geomState.depths" (this was not initially here), then changed "geomState.depths," into "depths"
+		geomState.depths,			// Code by lathika - first added "geomState.depths" (this was not initially here), then changed "geomState.depths," into "depths"
 		geomState.look_at_var_arr,	// Code by lathika
 		geomState.conic_opacity,
 		imgState.accum_alpha,
@@ -358,7 +379,13 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color), debug)
 
-	return num_rendered;
+	// Code by lathika 
+	cudaDeviceSynchronize();	// To make sure  that akk kernels have done executing
+	//torch::Tensor means_2D_tensor = torch::from_blob(reinterpret_cast<float*>(geomState.means2D), {P,2},torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)); // changed "means3D.options()" into "torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)"
+	//torch::Tensor means_2D_copy = means_2D.clone();
+	updateMeans(geomState.means2D, means_2D, P);
+
+	return num_rendered ;
 }
 
 // Produce necessary gradients for optimization, corresponding

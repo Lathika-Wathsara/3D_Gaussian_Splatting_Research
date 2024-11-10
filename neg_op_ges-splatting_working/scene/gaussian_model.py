@@ -35,7 +35,7 @@ class GaussianModel:
 
         self.covariance_activation = build_covariance_from_scaling_rotation
 
-        self.opacity_activation = sigmoid_conditioned #torch.sigmoid    
+        self.opacity_activation = sigmoid_conditioned #torch.sigmoid    # Code by lathika
         self.inverse_opacity_activation = inverse_sigmoid  
 
         self.rotation_activation = torch.nn.functional.normalize
@@ -113,18 +113,18 @@ class GaussianModel:
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
     
-    @property
-    def get_opacity(self):
-        return self.opacity_activation(self._opacity, self._isPositive) # Code by lathika
-        #return self.opacity_activation(self._opacity)
-    
     # Code by lathika
     @property
-    def get_isPositive(self):
+    def gs_isPositive(self):
         return self._isPositive
-    @get_isPositive.setter
-    def set_ispositive(self, value):
+    @gs_isPositive.setter
+    def gs_isPositive(self, value):
         self._isPositive = value
+
+    @property
+    def get_opacity(self):
+        return self.opacity_activation(self._opacity, self.gs_isPositive) # Code by lathika
+        #return self.opacity_activation(self._opacity)
     
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
@@ -148,7 +148,7 @@ class GaussianModel:
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
-        # Comment by lathika - Here we consider that when initializing, there are  no negative gaussians. 
+        # Comment by lathika - Here we consider that when initializing, there are no negative gaussians. 
         opacities = self.inverse_opacity_activation(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
@@ -166,7 +166,7 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         # Code by lathika
         # Bool type tensor is initialized for initial positive gaussians
-        self.set_isPositive(torch.ones((self.get_xyz.shape[0], 1), dtype= torch.bool, device ="cuda"))
+        self.gs_isPositive = torch.ones((self.get_xyz.shape[0], 1), dtype=torch.bool, device="cuda")
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -206,7 +206,7 @@ class GaussianModel:
         l.append('isPositive')  # Code by lathika
         return l
 
-    def save_ply(self, path):   # Concern about how the neg ops will be shown in the web, after their rasterization
+    def save_ply(self, path):   # Comment by lathika - Concern about how the neg ops will be shown in the web, after their rasterization
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
@@ -216,7 +216,7 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
-        isPositive = self._isPositive.detatch().cpu().numpy()   # Code by lathika
+        isPositive = self._isPositive.detach().cpu().numpy()   # Code by lathika
 
         # Code by lathika
         # We keep bool data type for isPositive attribute
@@ -226,7 +226,7 @@ class GaussianModel:
         # dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, isPositive), axis=1)    # Code by lathika - added "isPositive"
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -234,7 +234,7 @@ class GaussianModel:
     def reset_opacity(self):
         
         # Code by lathika
-        # Here is the gaussian is positive, then the domain is (0,1) and if negative the domain is (-1,0), but maps to the same domain (-inf,+inf)
+        # Here if the gaussian is positive, then the domain is (0,1) and if negative the domain is (-1,0), but maps to the same domain (-inf,+inf)
         opacities_new = self.inverse_opacity_activation(torch.min(torch.abs(self.get_opacity), torch.ones_like(self.get_opacity)*0.01))
         
         #opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
@@ -339,7 +339,7 @@ class GaussianModel:
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
         # Code by lathika
-        self.set_ispositive = self.get_isPositive[valid_points_mask]
+        self.gs_isPositive = self.gs_isPositive[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -384,7 +384,7 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         # Code by lathika
-        self.set_ispositive = torch.cat((self.get_isPositive, new_isPositive), dim=0)
+        self.gs_isPositive = torch.cat((self.gs_isPositive, new_isPositive), dim=0)
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
@@ -407,7 +407,7 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
 
         # Code byb lathika
-        new_isPositive = self.get_isPositive[selected_pts_mask].repeat(N,1)
+        new_isPositive = self.gs_isPositive[selected_pts_mask].repeat(N,1)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_isPositive) # Code by lathika added new_isPositive
 
@@ -428,7 +428,7 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
 
         # Code by lathika
-        new_isPositive = self.get_isPositive[selected_pts_mask]
+        new_isPositive = self.gs_isPositive[selected_pts_mask]
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_isPositive) # Code by lathika added new_isPositive 
 
@@ -447,7 +447,7 @@ class GaussianModel:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
-        print(f"prune mask size = {prune_mask.size()}")
+        #print(f"prune mask size = {prune_mask.size()}")
         self.prune_points(prune_mask)
 
         torch.cuda.empty_cache()
@@ -459,3 +459,22 @@ class GaussianModel:
     # Code by lathika
     def prune_unwanted_gauss(self,unwanted_gauss_filter ):
         self.prune_points(unwanted_gauss_filter)
+
+    # Code by lathika - add neg gaussians
+    def add_neg_gauss(self, neg_xyz, neg_scale, neg_rotation ):
+        size = neg_xyz.shape[0]
+        features_dc_neg = torch.zeros(size,1,3)
+        features_rest_neg =  torch.zeros(size,15,3)
+        
+
+        return 0
+
+
+    # Code by lathika - test 
+    def check_param_update(self,model):
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name} has been updated.")
+                print(f"Gradient values for {name}: {param.grad}")
+            else:
+                print(f"Gradient for {name} is None (not updated).")

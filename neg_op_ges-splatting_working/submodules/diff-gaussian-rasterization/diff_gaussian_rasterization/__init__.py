@@ -95,21 +95,21 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer)
-        return color, radii, unwanted_gauss, means_2D, depths
+        return color, radii, unwanted_gauss, means_2D, depths # Code by lathika - unwanted_gauss, means_2D, depths
 
     @staticmethod
     def backward(ctx, grad_out_color,  grad_out_radii=None, grad_out_unwanted_gauss=None,
-                 grad_out_means_2D=None, grad_out_depths= None):   # Code by lathika : replaced "_" with " grad_out_radii=None, grad_out_unwanted_gauss=None, grad_out_means_2D=None, grad_out_depths= None"
+                 grad_out_means_2D=None, grad_out_depths= None):   # Code by lathika : replaced "_" with " grad_out_radii=None, grad_out_unwanted_gauss=None, grad_out_means_2D=None, grad_out_depths= None "
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
-        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
+        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors  
 
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
                 means3D, 
-                radii, 
+                radii,
                 colors_precomp, 
                 scales, 
                 rotations, 

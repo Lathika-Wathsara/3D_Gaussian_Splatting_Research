@@ -51,7 +51,7 @@ namespace CudaRasterizer
 			float* out_color,
 			int* radii = nullptr,
 			int* unwanted_gauss = nullptr,	// Code by lathika
-			float2* means_2D = nullptr,		// Code by lathika
+			float* means_2D  = nullptr,		// Code by lathika "float2* means_2D  = nullptr" -> "float* means_2D  = nullptr"
 			float* depths = nullptr,		// Code by lathika
 			bool debug = false);
 

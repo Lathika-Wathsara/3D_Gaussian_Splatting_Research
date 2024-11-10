@@ -49,7 +49,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         debug=pipe.debug
     )
 
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+    rasterizer = GaussianRasterizer(raster_settings=raster_settings) 
 
     means3D = pc.get_xyz
     means2D = screenspace_points
@@ -98,10 +98,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     return {"render": rendered_image,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
-            "unwanted_gauss_filter"  : unwanted_gauss == 0,   # Code by lathika : If a neg gauss is unwanted, then it has a zero "unwanted_gauss" value
+            "unwanted_gauss_filter"  : unwanted_gauss < 1,   # Code by lathika : If a gauss is unwanted, then it has a zero "unwanted_gauss" value
             "radii": radii,
             "means_2D": means_2D,    # Code by lathika - added means_2D
-            "depths" : depths}       # Code by lathika - added depths
+            "depths" : depths}        # Code by lathika - added depths
 
 def render_laplacian(viewpoint_camera, pc : LaplacianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """

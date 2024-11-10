@@ -9,11 +9,50 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+
+
+
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
+
+
+// Code by lathika - test
+#include <curand_kernel.h>
+#include <cuda_runtime.h>
+#include <iostream>
+#include <type_traits>
+#include <cuda_runtime.h>
+void checkMemoryLocation(void* ptr) {
+    cudaPointerAttributes attributes;
+    cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+    if (err != cudaSuccess) {
+        std::cout << "Error retrieving pointer attributes: " << cudaGetErrorString(err) << std::endl;
+        return;
+    }
+    #if CUDART_VERSION >= 10000  // Check if CUDA version is 10.0 or later
+        if (attributes.type == cudaMemoryTypeDevice) {
+            std::cout << "Pointer is in GPU (device) memory." << std::endl;
+        } else if (attributes.type == cudaMemoryTypeHost) {
+            std::cout << "Pointer is in CPU (host) memory." << std::endl;
+        } else if (attributes.type == cudaMemoryTypeManaged) {
+            std::cout << "Pointer is in unified (managed) memory." << std::endl;
+        } else {
+            std::cout << "Unknown memory location." << std::endl;
+        }
+    #else
+        if (attributes.memoryType == cudaMemoryTypeDevice) {
+            std::cout << "Pointer is in GPU (device) memory." << std::endl;
+        } else if (attributes.memoryType == cudaMemoryTypeHost) {
+            std::cout << "Pointer is in CPU (host) memory." << std::endl;
+        } else {
+            std::cout << "Unknown memory location." << std::endl;
+        }
+    #endif
+}
+
 
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
@@ -351,7 +390,7 @@ renderCUDA(
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
-	{
+	{	
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
 		if (num_done == BLOCK_SIZE)
@@ -374,7 +413,7 @@ renderCUDA(
 
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
-		{
+		{	
 			// Keep track of current position in range
 			contributor++;
 
@@ -387,31 +426,48 @@ renderCUDA(
 			if (power > 0.0f)
 				continue;
 
+
+			// Code by lathika - test
+			/*
+			// Allocate memory for random states on device
+			// Retrieve the random state for this thread
+			curandState state;
+    		curand_init(1234, pix_id, 0, &state);
+			// Generate a random integer, e.g., between 1 and 100
+    		int randomInt = curand(&state) % 100000000;
+			if (randomInt%99999999==0){
+				printf("\n opacity = %f",con_o.w);
+				printf("\n rand num = %d", randomInt);
+			} */
+
 			// Code by lathika
 			float alpha;	// Since alpha is use in two places, I initially declared it here
 			// If a gaussian is negetive, add it to the array, and continue (No need to run the parts bellow)
 			if (con_o.w < 0.0f)
-			{
-				alpha = max(-0.99f, con_o.w * exp(power));
-				if (alpha > -1.0f / 255.0f)
-					continue;
-			if (pointer < Max_neg_arr_size - 1) {  // Check for array bounds before incrementing
-				pointer++;
-				num_neg_gauss++;
-				neg_gaus_idx_arr[pointer] = collected_id[j];
-				neg_gaus_alpha_arr[pointer] = alpha;
-				neg_gaus_depths[pointer] = collected_depths[j];
-				neg_gaus_look_at_var[pointer] = collected_look_at_var[j];
-			} else {
-				// Handle overflow case: you could break, skip, or flag this situation
-				// You could set a flag to track that you've run out of space
-				printf("Warning: Maximum number of negative Gaussians reached. Skipping additional Gaussians.\n");
-			}
-			continue;
+			{		
+					printf("check neg gause breach");	// Code by lathika test
+					alpha = max(-0.99f, con_o.w * exp(power));
+					if (alpha > -1.0f / 255.0f)
+						continue;
+				if (pointer < Max_neg_arr_size - 1) {  // Check for array bounds before incrementing
+					pointer++;
+					num_neg_gauss++;
+					neg_gaus_idx_arr[pointer] = collected_id[j];
+					neg_gaus_alpha_arr[pointer] = alpha;
+					neg_gaus_depths[pointer] = collected_depths[j];
+					neg_gaus_look_at_var[pointer] = collected_look_at_var[j];
+				} else {
+					// Handle overflow case: you could break, skip, or flag this situation
+					// You could set a flag to track that you've run out of space
+					printf("Warning: Maximum number of negative Gaussians reached. Skipping additional Gaussians.\n");
+				}
+				continue;
+				}
 			// Code by lathika
 			alpha = min(0.99f, con_o.w * exp(power));
 			if (num_neg_gauss !=0)
 			{	
+				printf("check num_neg_gauss inside");	// Code by lathika test
 				float pos_var = collected_look_at_var[j];
 				float pos_depth = collected_depths[j];
 				float T_neg = 1.0f;
@@ -499,7 +555,7 @@ renderCUDA(
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 	}
 }
-}
+
 
 void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gaussians)
 	const dim3 grid, dim3 block,
@@ -519,10 +575,11 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 {
 
 	// Code by lathika - Globaly initializing arrays to compute the alpha values to sort out the unwanted gaussians
-	// Allocated memory for alpha_sum and contrib_count
+	// Allocated memory for alpha_sum and contrib_count and unwanted_gauss
 	float* alpha_sum;
 	uint32_t* contrib_count;
 	int n_gaussians = P;
+	int* unwanted_gauss_both;
 	// Allocate alpha_sum & contrib_count as arrays on the device
 	cudaMalloc(&alpha_sum, n_gaussians * sizeof(float));	// alpha_sum - will store the sum of alpha values to calculate the average and add gaussians to prune.
 	cudaMalloc(&contrib_count, n_gaussians * sizeof(uint32_t)); // contrib_count - will store the number of contribution for each gaussian
@@ -530,13 +587,19 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 	cudaMemset(alpha_sum, 0, n_gaussians*sizeof(float));
 	cudaMemset(contrib_count, 0, n_gaussians*sizeof(uint32_t));
 
+	cudaMallocManaged(&unwanted_gauss_both, n_gaussians * sizeof(int));	// Allocate Unified Memory for GPU/Host updates
+	/*// Initialize unwanted_gauss_both on the host - Remove this part if wants
+    for (int i = 0; i < n_gaussians; i++) {
+        unwanted_gauss_both[i] = 0;
+    }*/
+
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,
 		means2D,
 		colors,
-		unwanted_gauss,	// Code by lathika
+		unwanted_gauss_both,	// Code by lathika
 		depths,		// Code by lathika
 		look_at_var_arr, // Code by lathika
 		conic_opacity,
@@ -548,28 +611,35 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 		contrib_count);	// Code by lathika
 
 	// Code by lathika
+	cudaDeviceSynchronize(); // Wait for GPU to finish
 	// Host arrays to store alpha_sum and contrib_count
 	float* h_alpha_sum = new float[n_gaussians];
 	uint32_t* h_contrib_count = new uint32_t[n_gaussians];
 	// Copy data from device to host
 	cudaMemcpy(h_alpha_sum, alpha_sum, n_gaussians * sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_contrib_count, contrib_count, n_gaussians * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+	// Copy data from unwanted_gauss_both (GPU/Unified Memory) to unwanted_gauss (Host)
+	cudaMemcpy(unwanted_gauss, unwanted_gauss_both, n_gaussians * sizeof(int), cudaMemcpyDeviceToHost);
+	
 	// Calculating the average and updating the filter
 	for (int i = 0; i < n_gaussians; i++) {
 		if (h_contrib_count[i] > 0 ) {  // Make sure there's at least one contribution
 			float avg_alpha = h_alpha_sum[i] / h_contrib_count[i];
-			float alpha_threshold = 1.0f / 255.0f	;// Change this accordingly
+			float alpha_threshold = 1.0f / 255.0f;// Change this accordingly
+			
 			if (avg_alpha > alpha_threshold) {  // Apply your threshold
 				unwanted_gauss[i] = 1;  // Mark Gaussian as wanted. If a gaussian has a valid positive opacity, then add it to the filter
 			}
 		}
 	}
+	//std::cout << "Check point 10" << std::endl;
 
 	// cudaMemcpy(d_unwanted_neg_gauss, unwanted_neg_gauss, n_gaussians * sizeof(int), cudaMemcpyHostToDevice);
 
 	// Code by lathika - Free memory after kernel execution
 	cudaFree(alpha_sum);
 	cudaFree(contrib_count);
+	cudaFree(unwanted_gauss_both);
 	// Free host memory
 	delete[] h_alpha_sum;
 	delete[] h_contrib_count;
