@@ -32,6 +32,7 @@ namespace CudaRasterizer
 		float* depths;
 		char* scanning_space;
 		bool* clamped;
+		bool* ctn_gauss_mask;	// Code by lathika - because we escape adding , when accumulated alpha is <1/255. So this should be considered in backward pass 
 		int* internal_radii;
 		int* internal_unwanted_gauss;	// Code by lathika
 		float2* means2D;

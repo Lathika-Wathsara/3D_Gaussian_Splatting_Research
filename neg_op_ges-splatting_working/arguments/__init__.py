@@ -87,6 +87,9 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0003
+        #self.add_neg_gaus_from_iter = 1000 # Code by lathika
+        self.unwanted_gauss_prune_after_iter = 1500 # Code by lathika
+        self.unwanted_gauss_prun_interval = 200 # Code by lathika
         
         # New
         self.shape_lr = 0.001

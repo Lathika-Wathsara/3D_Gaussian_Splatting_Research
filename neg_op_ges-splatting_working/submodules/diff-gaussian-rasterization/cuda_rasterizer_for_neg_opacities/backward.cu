@@ -478,6 +478,7 @@ __global__ void preprocessCUDA(
 	const int* radii,
 	const float* shs,
 	const bool* clamped,
+	const float4* conic_opacity,	// Code by lathika
 	const glm::vec3* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
@@ -520,14 +521,18 @@ __global__ void preprocessCUDA(
 		return ;
 	}
 
+	// Code by lathika
+	float4 con_o = conic_opacity[idx];
+
 	// Compute gradient updates due to computing colors from SHs
-	if (shs)
+	if (shs &&(con_o.w > 0.0f))	// Code by lathika - added ||(con_o.w > 0.0f) , only for positive gaussinas, mean will be affected by colors
 		computeColorFromSH(idx, D, M, (glm::vec3*)means, *campos, shs, clamped, (glm::vec3*)dL_dcolor, (glm::vec3*)dL_dmeans, (glm::vec3*)dL_dsh);
 
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
 		computeCov3D(idx, scales[idx], scale_modifier, rotations[idx], dL_dcov3D, dL_dscale, dL_drot);
 }
+
 
 // Backward version of the rendering procedure.
 template <uint32_t C>
@@ -537,7 +542,11 @@ renderCUDA(
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
 	const float* __restrict__ bg_color,
+	const bool* ctn_gauss_mask, // Code by lathika
 	const float2* __restrict__ points_xy_image,
+	const float* __restrict__ depths,	// Code by lathika
+	const float* __restrict__ look_at_var_arr,	// Code by lathika
+	float* __restrict__ pos_dL_dAcummApha_arr, // Code by lathika
 	const float4* __restrict__ conic_opacity,
 	const float* __restrict__ colors,
 	const float* __restrict__ final_Ts,
@@ -565,10 +574,25 @@ renderCUDA(
 	bool done = !inside;
 	int toDo = range.y - range.x;
 
+	// Code by lathika
+	// pos_dL_dAcummApha_arr :- This array will store the positive alpha values of the previouse positive gaussians.
+														// If a positive gaussian was affected by negative gaussians then this accumulated alpha = pos_alpha + neg_accum_alpha,
+														// where neg_accum_alpha = n_alpha_1 + n_alpha_2*(1+n_alpha_1) +  n_alpha_3*(1+n_alpha_2)*(1+n_alpha_1) + ........
+	float T_final_neg = 1.0f;
+	int pos_min_i = (pix.x + pix.y * W) * 1 * BLOCK_SIZE;	// Caution! Change if want, by considering size of pos_dL_dAcummApha_arr, defined just before launching this kernel
+	int closest_pos_pointer = pos_min_i;	
+	int closest_pos_glob_idx;
+	int closest_pos_range_idx_ptr ;
+	bool neg_gauss_loop = true;	// After finding a neg gaussian, there should be one loop. Neg gaussian loops should start after a another positive gaussian.
+	float neg_alpha ;
+	bool dlaa_p_once = false;	// dL_dAccumAlpha is stored in a cyclic manner, if a full cycle is completed, past data can be accessed by refering to the other end
+
+
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
+	__shared__ float collected_range_idx[BLOCK_SIZE]; // Code by lathika
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
@@ -609,6 +633,7 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
+			collected_range_idx[block.thread_rank()] = range.y - progress - 1; // Code by lathika
 		}
 		block.sync();
 
@@ -621,15 +646,203 @@ renderCUDA(
 			if (contributor >= last_contributor)
 				continue;
 
+			// Code by lathika
+			if (ctn_gauss_mask[collected_id[j]])
+				continue;
+
 			// Compute blending values, as before.
-			const float2 xy = collected_xy[j];
-			const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+			float2 xy = collected_xy[j];	// Code by lathika removed const
+			float2 d = { xy.x - pixf.x, xy.y - pixf.y };	// Code by lathika removed const
 			const float4 con_o = collected_conic_opacity[j];
-			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;	// Code by lathika removed const
 			if (power > 0.0f)
 				continue;
 
-			const float G = exp(power);
+			float G = exp(power);	// Code by lathika removed const
+
+			// Code by lathika
+			if (con_o.w < 0.0f)		// neg gauss detected
+			{	
+				neg_alpha = max(-0.99f, con_o.w * G);
+				if (!neg_gauss_loop || neg_alpha > -1.0f / 255.0f)
+					continue;
+				neg_gauss_loop = false;
+				
+
+				float neg_depth;
+				float neg_var;
+				float pos_depth;
+				float pos_var;
+				float4 con_o_n;
+				float4 con_o_p;
+				int mpr = closest_pos_range_idx_ptr;	// max positive gauss index pointer - Maximum positive gauss that is affected by the neg gaussians
+				int mpr_temp = closest_pos_range_idx_ptr;
+				int mpr_idx = closest_pos_glob_idx;
+				int n_idx = collected_id[j];	// Closest neg gauss index
+				int c=0; // test
+				while (mpr_temp < range.y )	// To get the maximum positive gaussian that will be effected by this neg gauss set
+				{	
+					int mpr_idx = point_list[mpr_temp];
+					pos_depth = depths[mpr_idx];
+					pos_var = look_at_var_arr[mpr_idx];
+					con_o_p = conic_opacity[mpr_idx]; 
+					if (con_o_p.w > 0.0f)
+					{
+						mpr = mpr_temp;
+						c++; // Test
+					}
+					neg_depth = depths[n_idx];
+					neg_var = look_at_var_arr[n_idx]; 
+					if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
+						//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), c);//Test
+						break;
+					mpr_temp ++;
+				}
+
+				T_final_neg = 1.0f;;
+				int mlrp_n = collected_range_idx[j]; // main loop neg gauss range index pointer (Will be updated in the loop below)
+				int closest_neg_range_idx_ptr = collected_range_idx[j]; 	// Closest negative gaussian pointer
+				pos_depth = depths[closest_pos_glob_idx];	// Closest pos gauss depth
+				pos_var = look_at_var_arr[closest_pos_glob_idx];	// Closest pos gauss var
+				int mlgi_n ;				// main loop neg gauss global index
+				float dL_dAccumAlpha_p = 0.0f;
+				// Looping through neg gauss and getting the least affected neg gauss and calculating T_final_neg
+				// And this will update mlrp_n
+
+				// Test ///////////////////////-----------------Issue is in the loop below
+				while(mlrp_n >= range.x)
+				{	
+					mlgi_n = point_list[mlrp_n];
+					neg_depth = depths[mlgi_n];
+					neg_var = look_at_var_arr[mlgi_n];
+					con_o_n = conic_opacity[mlgi_n];
+					// Test --- Even after breaking here, It gives illigal memory access
+					if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)) || con_o_n.w > 0.0f)
+					{
+						mlrp_n++;
+						//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count_a = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
+						break;
+					}
+					
+
+					xy = points_xy_image[mlgi_n];
+					d = { xy.x - pixf.x, xy.y - pixf.y };
+					
+					mlrp_n --;
+					power = -0.5f * (con_o_n.x * d.x * d.x + con_o_n.z * d.y * d.y) - con_o_n.y * d.x * d.y;
+					G = exp(power);
+					neg_alpha = max(-0.99f, con_o.w * G);
+					if (power > 0.0f || neg_alpha > -1.0f / 255.0f)
+						continue;
+					T_final_neg = T_final_neg*(1 + neg_alpha);		
+				}
+				
+				int lrp_p = closest_pos_range_idx_ptr; // loop pos gauss range index pointer
+				int lrp_n = mlrp_n;	// loop neg gauss range index pointer
+				int lgi_n;	// loop_glob_idx_negative
+				int lgi_p;	// loop_glob_idx_positive
+				int lr_pin_p = closest_pos_range_idx_ptr;	// loop range poisitive gaussian pin
+				int dL_dalpha_n;
+				float T_temp_n = T_final_neg;
+				int dlaa_p = closest_pos_pointer - 1;	// Possitive dL_dAccumAlpha pointer (index)
+				
+				// For each neg gauss (g0) starting from left (least) updating gradians of neg gauss starting from the closest neg gauss (to pos gauss) to it (g0), 
+				// w.r.t the positive gaussians in it's (g0) range
+				while(mlrp_n <= closest_neg_range_idx_ptr)
+				{	
+					lrp_p = lr_pin_p;
+					lrp_n = mlrp_n;
+					mlgi_n = point_list[mlrp_n];
+					mlrp_n ++;
+					neg_depth = depths[mlgi_n];
+					neg_var = look_at_var_arr[mlgi_n];
+					xy = points_xy_image[mlgi_n];
+					d = { xy.x - pixf.x, xy.y - pixf.y };
+					con_o_n = conic_opacity[mlgi_n];
+					power = -0.5f * (con_o_n.x * d.x * d.x + con_o_n.z * d.y * d.y) - con_o_n.y * d.x * d.y;
+					G = exp(power);
+					neg_alpha = max(-0.99f, con_o_n.w * G);
+					if (power > 0.0f || neg_alpha > -1.0f / 255.0f)
+						continue;
+					
+					// Socond loop to loop through positive gauss until the corresponding limit and mark the pin
+					while (lrp_p <= mpr)	// mpr is the pos gauss pointer in range. This pos gauss is the last (with max distance) in the active range of the closest neg gauss (closest to pos gausses) 
+					{	
+						lgi_p = point_list[lrp_p];
+						pos_depth = depths[lgi_p];
+						pos_var = look_at_var_arr[lgi_p];
+						con_o_p = conic_opacity[lgi_p];
+						lrp_p ++;
+						// If there were some neg gaus in middle if positive gauss range
+						if (con_o_p.w < 0.0f){
+							continue;}
+						// If dlaa_p comes to the begining of the stored array, go to the right corresponding, corrner. (This can only be done once)
+						if ((dlaa_p < pos_min_i) && dlaa_p_once)
+						{
+							dlaa_p = (pix.x + pix.y * W + 1) * 1 * BLOCK_SIZE -1;	
+							if (dlaa_p >= H * W * 1 * BLOCK_SIZE || dlaa_p <0) // Test
+								printf("closest_pos_pointer going out of range 2"); // Test
+							dlaa_p_once = false;
+							//printf("pos alpha range exceeded looping\n");// Test
+						}
+						else if ((dlaa_p < pos_min_i) && !dlaa_p_once){ // Else, we dont have the gradient info, so break.
+							mlrp_n = closest_pos_range_idx_ptr;		  // Break the main loop
+							//printf("pos alpha range not enough\n");// Test
+							break;
+						}
+
+						if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
+						{
+							lr_pin_p = lrp_p-1;	// We are incrementing lrp_p before, so we need to reduce one.
+							T_final_neg = T_final_neg/(1 + neg_alpha);
+							break;
+						}
+						if (dlaa_p >= H * W * 1 * BLOCK_SIZE || dlaa_p<0) // Test
+								printf("closest_pos_pointer going out of range 3"); // Test
+						dL_dAccumAlpha_p = pos_dL_dAcummApha_arr[dlaa_p];	// This array is defined in the device. 
+																			//It stored dL_dAccumAlpha for each poss gauss in each thread. (so uses a different index)
+						dlaa_p--; 	// dL_dalpha (accum alpha if affected by neg gauss) is updated in the array only for the positive gaussians
+						
+						// Grad update loop for neg gaussians
+						while(lrp_n <= closest_neg_range_idx_ptr)
+						{
+							//printf("Updating neg gauss"); // Test - This runs
+							lgi_n = point_list[lrp_n];
+							lrp_n ++;
+							xy = points_xy_image[lgi_n];
+							d = { xy.x - pixf.x, xy.y - pixf.y };
+							con_o_n = conic_opacity[lgi_n];
+							power = -0.5f * (con_o_n.x * d.x * d.x + con_o_n.z * d.y * d.y) - con_o_n.y * d.x * d.y;
+							G = exp(power);
+							neg_alpha = max(-0.99f, con_o_n.w * G);
+							if (power > 0.0f || neg_alpha > -1.0f / 255.0f)
+								continue;
+							T_temp_n = T_final_neg/(1 + neg_alpha);
+							dL_dalpha_n = T_temp_n * dL_dAccumAlpha_p;
+
+							// Helpful reusable temporary variables
+							const float dL_dG = con_o_n.w * dL_dalpha_n;
+							const float gdx = G * d.x;
+							const float gdy = G * d.y;
+							const float dG_ddelx = -gdx * con_o_n.x - gdy * con_o_n.y;
+							const float dG_ddely = -gdy * con_o_n.z - gdx * con_o_n.y;
+							// Update gradients w.r.t. 2D mean position of the Gaussian
+							atomicAdd(&dL_dmean2D[lgi_n].x, dL_dG * dG_ddelx * ddelx_dx);
+							atomicAdd(&dL_dmean2D[lgi_n].y, dL_dG * dG_ddely * ddely_dy);
+							// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+							atomicAdd(&dL_dconic2D[lgi_n].x, -0.5f * gdx * d.x * dL_dG);
+							atomicAdd(&dL_dconic2D[lgi_n].y, -0.5f * gdx * d.y * dL_dG);
+							atomicAdd(&dL_dconic2D[lgi_n].w, -0.5f * gdy * d.y * dL_dG);
+							// Update gradients w.r.t. opacity of the Gaussian
+							atomicAdd(&(dL_dopacity[lgi_n]), G * dL_dalpha_n);
+						}
+					}
+				}
+
+				continue;
+			}
+
+
 			const float alpha = min(0.99f, con_o.w * G);
 			if (alpha < 1.0f / 255.0f)
 				continue;
@@ -686,6 +899,20 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+
+			// Code by lathika
+			if (closest_pos_pointer >= (pix.x + pix.y * W + 1) * 1 * BLOCK_SIZE )
+			{
+				closest_pos_pointer = pos_min_i ;
+				dlaa_p_once = true;
+			}
+			if (closest_pos_pointer>= H * W * 1 * BLOCK_SIZE || closest_pos_pointer < 0)	// Test
+				printf("closest_pos_pointer going out of range"); // Test
+			pos_dL_dAcummApha_arr[closest_pos_pointer] = dL_dalpha;
+			closest_pos_pointer ++ ;
+			closest_pos_glob_idx = global_id;
+			closest_pos_range_idx_ptr = collected_range_idx[j];
+			neg_gauss_loop = true;
 		}
 	}
 }
@@ -696,6 +923,7 @@ void BACKWARD::preprocess(
 	const int* radii,
 	const float* shs,
 	const bool* clamped,
+	const float4* conic_opacity,	// Code by lathika
 	const glm::vec3* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
@@ -741,6 +969,7 @@ void BACKWARD::preprocess(
 		radii,
 		shs,
 		clamped,
+		conic_opacity,	// Code by lathika
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
@@ -761,7 +990,10 @@ void BACKWARD::render(
 	const uint32_t* point_list,
 	int W, int H,
 	const float* bg_color,
+	const bool* ctn_gauss_mask, // Code by lathika
 	const float2* means2D,
+	const float* depths,			// Code by lathika
+	const float* look_at_var_arr, 	// Code by lathika
 	const float4* conic_opacity,
 	const float* colors,
 	const float* final_Ts,
@@ -772,12 +1004,22 @@ void BACKWARD::render(
 	float* dL_dopacity,
 	float* dL_dcolors)
 {
+	// Code by lathika - to store possitive_dL_dalpha values
+	float* pos_dL_dAcummApha_arr;
+	int byte_size =  W * H * 1 * BLOCK_SIZE * sizeof(float) ;	// Change the size if want - search from "1 * BLOCK_SIZE"
+	gpuErrorchk(cudaMalloc(&pos_dL_dAcummApha_arr, byte_size)); 
+	gpuErrorchk(cudaMemset(pos_dL_dAcummApha_arr, 0, byte_size));	// initializing
+
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
 		point_list,
 		W, H,
 		bg_color,
+		ctn_gauss_mask, // Code by lathika
 		means2D,
+		depths,				// Code by lathika
+		look_at_var_arr,	// Code by lathika
+		pos_dL_dAcummApha_arr, // Code by lathika
 		conic_opacity,
 		colors,
 		final_Ts,
@@ -788,4 +1030,6 @@ void BACKWARD::render(
 		dL_dopacity,
 		dL_dcolors
 		);
+
+	gpuErrorchk(cudaFree(pos_dL_dAcummApha_arr));
 }

@@ -34,7 +34,7 @@ namespace cg = cooperative_groups;
 #include <torch/extension.h> // Code by lathika
 
 // Code by lathika - CUDA kernel to create the tensor
-__global__ void updateMeansKernet(const float2* means_2D_ptr, float* tensor_ptr, int P){
+__global__ void updateMeansKernel(const float2* means_2D_ptr, float* tensor_ptr, int P){
 	int idx = blockIdx.x*blockDim.x + threadIdx.x;
 	if (idx < P){
 		tensor_ptr[2*idx] = means_2D_ptr[idx].x;
@@ -44,9 +44,22 @@ __global__ void updateMeansKernet(const float2* means_2D_ptr, float* tensor_ptr,
 void updateMeans(const float2* means_2D_ptr, float* tensor_ptr, int P){
 	int blockSize = 256;
 	int gridSize = (P + blockSize - 1)/ blockSize;
-	updateMeansKernet<<<gridSize, blockSize>>>(means_2D_ptr,tensor_ptr, P);
+	updateMeansKernel<<<gridSize, blockSize>>>(means_2D_ptr,tensor_ptr, P);
 	cudaDeviceSynchronize();
 }
+__global__ void updateDepthsKernel(const float* depths_ptr, float* tensor_ptr, int P){
+	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (idx < P){
+		tensor_ptr[idx] = depths_ptr[idx];
+	}
+}
+void updateDepths(const float* depths_ptr, float* tensor_ptr, int P){
+	int blockSize = 256;
+	int gridSize = (P + blockSize - 1)/ blockSize;
+	updateDepthsKernel<<<gridSize, blockSize>>>(depths_ptr, tensor_ptr, P);
+	cudaDeviceSynchronize();
+}
+
 
 // Helper function to find the next-highest bit of the MSB
 // on the CPU.
@@ -175,6 +188,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	GeometryState geom;
 	obtain(chunk, geom.depths, P, 128);
 	obtain(chunk, geom.clamped, P * 3, 128);
+	obtain(chunk, geom.ctn_gauss_mask, P , 128);	// Code by lathika - because we escape adding , when accumulated alpha is <1/255. So this should be considered in backward pass 
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.internal_unwanted_gauss, P, 128);	// Code by lathika
 	obtain(chunk, geom.means2D, P, 128);
@@ -259,6 +273,7 @@ int CudaRasterizer::Rasterizer::forward(
 	{	
 		unwanted_gauss = geomState.internal_unwanted_gauss;
 	}
+	
 
 	// Code by lathika
 	/*
@@ -268,9 +283,11 @@ int CudaRasterizer::Rasterizer::forward(
 	*/
 
 	// Code by lathika
+	/*
 	if (depths == nullptr){
 		depths = geomState.depths;
 	}
+	*/
 
 
 	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
@@ -296,6 +313,7 @@ int CudaRasterizer::Rasterizer::forward(
 		opacities,
 		shs,
 		geomState.clamped,
+		geomState.ctn_gauss_mask,	// Code by lathika
 		cov3D_precomp,
 		colors_precomp,
 		viewmatrix, projmatrix,
@@ -368,6 +386,7 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
+		geomState.ctn_gauss_mask, // Code by lathika
 		geomState.means2D,	// Code by lathika - changed "geomState.means2D," into "means_2D"
 		feature_ptr,
 		unwanted_gauss,	// Code by lathika
@@ -380,10 +399,11 @@ int CudaRasterizer::Rasterizer::forward(
 		out_color), debug)
 
 	// Code by lathika 
-	cudaDeviceSynchronize();	// To make sure  that akk kernels have done executing
+	cudaDeviceSynchronize();	// To make sure  that all kernels have done executing
 	//torch::Tensor means_2D_tensor = torch::from_blob(reinterpret_cast<float*>(geomState.means2D), {P,2},torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)); // changed "means3D.options()" into "torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)"
 	//torch::Tensor means_2D_copy = means_2D.clone();
 	updateMeans(geomState.means2D, means_2D, P);
+	updateDepths(geomState.depths, depths, P);
 
 	return num_rendered ;
 }
@@ -447,7 +467,10 @@ void CudaRasterizer::Rasterizer::backward(
 		binningState.point_list,
 		width, height,
 		background,
+		geomState.ctn_gauss_mask, 	// Code by lathika
 		geomState.means2D,	
+		geomState.depths,			// Code by lathika 
+		geomState.look_at_var_arr,	// Code by lathika
 		geomState.conic_opacity,
 		color_ptr,
 		imgState.accum_alpha,
@@ -467,6 +490,7 @@ void CudaRasterizer::Rasterizer::backward(
 		radii,
 		shs,
 		geomState.clamped,
+		geomState.conic_opacity, // Code by lathika
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,

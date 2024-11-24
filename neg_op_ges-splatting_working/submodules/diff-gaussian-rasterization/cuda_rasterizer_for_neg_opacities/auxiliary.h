@@ -173,4 +173,18 @@ throw std::runtime_error(cudaGetErrorString(ret)); \
 } \
 }
 
+
+// Code by lathika
+// Using a macro to print - here we have used __FILE__ and __LNE__ amcro to print line and the file
+#define gpuErrorchk(ans) { gpuAssert((ans), __FILE__, __LINE__);}
+// inline -> Compiler will replace the string with this small function. (This is not efficient for larger functions, but good for smaller functions)
+inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort = true)
+{
+	if (code != cudaSuccess) {
+		fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+		if (abort) exit(code);
+	}
+}
+
+
 #endif

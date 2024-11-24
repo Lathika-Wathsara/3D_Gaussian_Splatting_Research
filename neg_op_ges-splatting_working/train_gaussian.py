@@ -25,9 +25,23 @@ from utils.extra_utils import random_id
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import wandb
-from utils.neg_gauss_init_utils import detect_blobs_dog, knn_2d, get_mean_3d, get_border_blob_mask, get_in_image_gaussian_mask   # Code by lathika
+from utils.neg_gauss_init_utils import  get_new_neg_points  # Code by lathika
 import cv2 # Code by lathika - test
 import numpy as np # Code by lathika - test
+
+# Code by lathika - test
+def check_for_nan(arr):
+            return torch.isnan(arr.clone().detach()).any()
+def test_each_iter_for_none(iteration, gaussians):
+        with open("/home/lathika/Workspace/test/Dump/output_2.txt","a") as file:
+            file.write(f"\n Iteration = {iteration} xyz = {check_for_nan(gaussians._xyz)}  op = {check_for_nan(gaussians._opacity[0])} \
+                    f_dc = {check_for_nan(gaussians._features_dc)} f_r = {check_for_nan(gaussians._features_rest)} s = {check_for_nan(gaussians._scaling)} \
+                        r = {check_for_nan(gaussians._rotation)} iP = {check_for_nan(gaussians._isPositive)} m_r = {check_for_nan(gaussians.max_radii2D)} xyz_g = {check_for_nan(gaussians.xyz_gradient_accum)}\
+                        den = {check_for_nan(gaussians.denom)} xyz_grad = {gaussians._xyz.grad.data.norm(2).item()} op_grad = {gaussians._opacity.grad.data.norm(2).item()}\
+                        f_dc_grad = {gaussians._features_dc.grad.data.norm(2).item()} f_r_grad = {gaussians._features_rest.grad.data.norm(2).item()} s_grad = {gaussians._scaling.grad.data.norm(2).item()}\
+                        r_grad = {gaussians._rotation.grad.data.norm(2).item()} xyz_grad_accum = {check_for_nan(gaussians.xyz_gradient_accum)}  \n")
+
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_to_wandb):
     first_iter = 0
@@ -49,7 +63,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    unwanted_gauss_total_acum = torch.zeros(size = (gaussians.get_xyz.shape[0],), dtype = torch.bool) # Code by lathika
     add_neg_gauss_flage = None # Code by lathika
+    adding_neg_gauss_flag = None # Code by lathika - while adding neg gaussians
 
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
@@ -80,11 +96,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             viewpoint_stack = scene.getTrainCameras().copy()
 
             # Code by lathika
-            if iteration >=1000:
+            unwanted_gauss_acum = torch.zeros(size = (gaussians.get_xyz.shape[0],), dtype = torch.bool)
+            if iteration >=1000:#1000
                 if add_neg_gauss_flage== None:
                     add_neg_gauss_flage = True
                 else:
                     add_neg_gauss_flage = False
+
 
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         
@@ -100,33 +118,45 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        if iteration>1000: # Code by lathika - test 
+            print(f"check 1 = {iteration}")
         loss.backward()
 
         iter_end.record()
 
+
+        # Code by lathika
+        if iteration >=1000 and iteration%250==0: # Changed for testing   # After 1000 iterations, neg gaussians are added with 500 intervals
+            add_neg_gauss_flage=None
+
+        # Code by lathika
+        if len(viewpoint_stack)==0:
+            unwanted_gauss_total_acum = unwanted_gauss_acum
+
         # Code by lathika - test 
+        if iteration>1000:
+            print(f"check 2 = {iteration}")
         if iteration%1000==0:
             print(iteration)
         it_1 = 7000
         it_2 = 30000
         it_3 = 40000
-        def check_for_nan(arr):
-            return torch.isnan(arr.clone().detach()).any()
-
+        
         if iteration == it_1 or iteration == it_2 or  iteration == it_3:
             image_cpu  = image.clone().detach().cpu().numpy()
             gt_cpu = gt_image.clone().cpu().numpy().transpose(1,2,0)
-            print(f"gt_image shape = {gt_cpu.shape}\n")
-            print(f"image shape = {image_cpu.shape}\n")
+            #print(f"gt_image shape = {gt_cpu.shape}\n")
+            #print(f"image shape = {image_cpu.shape}\n")
             image_cpu = image_cpu.transpose(1,2,0)
-            print(f"image shape = {image_cpu.shape}\n")
+            #print(f"image shape = {image_cpu.shape}\n")
             image_cpu = cv2.cvtColor((image_cpu * 255).astype(np.uint8) , cv2.COLOR_BGR2RGB)
             gt_cpu = cv2.cvtColor((gt_cpu * 255).astype(np.uint8) , cv2.COLOR_BGR2RGB)
 
-            cv2.imwrite(f"/home/lathika/Workspace/test/Dump/Dump_img/1_No_neg/output{iteration}.jpg", image_cpu)
-            cv2.imwrite(f"/home/lathika/Workspace/test/Dump/Dump_img/1_No_neg/output_gt{iteration}.jpg", gt_cpu)
+            cv2.imwrite(f"/home/lathika/Workspace/test/Dump/Dump_img/2_with_neg_test_1/output{iteration}.jpg", image_cpu)
+            cv2.imwrite(f"/home/lathika/Workspace/test/Dump/Dump_img/2_with_neg_test_1/output_gt{iteration}.jpg", gt_cpu)
 
             with open("/home/lathika/Workspace/test/Dump/output.txt","a") as file:
+                file.write(f"\n total_wanted_points = {torch.sum(~unwanted_gauss_filter)} , \n unwanted_points = {torch.sum(unwanted_gauss_filter)} \n")
                 file.write(f"\n means_2D shape = {means_2D.shape}\n")
                 file.write(f"depth shape = {depths.shape}\n")
                 file.write(f"means_3D shape ={gaussians.get_xyz.shape}\n")
@@ -141,58 +171,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 file.write(f"means_3D 10 = {gaussians.get_xyz[:10]}\n")
                 file.write(f"image =\n {image_cpu}\n") # np.array2string(image_cpu, threshold=np.inf)
                 file.write(f"gt_image =\n {gt_cpu}\n")
-        """
-        with open("/home/lathika/Workspace/test/Dump/output_2.txt","a") as file:
-            file.write(f"Iteration = {iteration} xyz = {check_for_nan(gaussians._xyz)}  op = {check_for_nan(gaussians._opacity[0])} \
-                     f_dc = {check_for_nan(gaussians._features_dc)} f_r = {check_for_nan(gaussians._features_rest)} s = {check_for_nan(gaussians._scaling)} \
-                        r = {check_for_nan(gaussians._rotation)} iP = {check_for_nan(gaussians._isPositive)} m_r = {check_for_nan(gaussians.max_radii2D)} xyz_g = {check_for_nan(gaussians.xyz_gradient_accum)}\
-                        den = {check_for_nan(gaussians.denom)} xyz_grad = {gaussians._xyz.grad.data.norm(2).item()} op_grad = {gaussians._opacity.grad.data.norm(2).item()}\
-                        f_dc_grad = {gaussians._features_dc.grad.data.norm(2).item()} f_r_grad = {gaussians._features_rest.grad.data.norm(2).item()} s_grad = {gaussians._scaling.grad.data.norm(2).item()}\
-                        r_grad = {gaussians._rotation.grad.data.norm(2).item()} xyz_grad_accum = {check_for_nan(gaussians.xyz_gradient_accum)}  \n")
 
-        """
 
-        # Code by lathika - For initializing the negative gaussians
-        add_neg_gauss_flage = False # Code by lathika to stop running the part below
-        if add_neg_gauss_flage:
-            if iteration % 30 == 0:     # This step is taken to reduce the number of images that will be processed for blob detection
-                                        # Every image with an interval of 30, will be selected. (We can change this)
-                image_cpu_numpy = gt_image.cpu().numpy()
-                # Define blob detection parameters
-                min_blob_size = 5  # Minimum blob size (in pixels)
-                max_blob_size = 8  # Maximum blob size (in pixels)
-                num_intervals = 5  # Number of intervals to divide the size range
-                # Detect blobs 
-                blobs, _ = detect_blobs_dog(image_cpu_numpy, min_blob_size, max_blob_size, num_intervals)
-                blobs = torch.tensor(blobs, device="cuda")
-                blobs_xy = blobs[:,:2]
-
-                # Filtering the blobs closer to the edges
-                height = viewpoint_cam.image_height
-                width  = viewpoint_cam.image_width
-                blobs_mask = get_border_blob_mask(blobs_xy, width, height)
-                blobs_filtered = blobs[blobs_mask]
-                blobs_xy = blobs_filtered[:,:2]
-                blob_radii = blobs_filtered[:,2]
-                blob_scales =  blob_radii.repeat(1,3)
-                blob_rotation = torch.zeros(blobs_xy.shape[0],4)
-                blob_rotation[:,0] = 1
-
-                # Filter out (0,0) means_2d values (because gaussians are out of frustrum)
-                means_2D_mask = get_in_image_gaussian_mask(means_2D)
-                means_2D_new = means_2D[means_2D_mask]
-                depths_new = depths[means_2D_mask]
-                
-                # Calculating knn
-                knn_indices, _ = knn_2d(blobs_xy, means_2D_new)
-                depths_avg_new = torch.mean(depths_new[knn_indices],dim=1)
-
-                # Getting 3d coordinates
-                neg_gaus_3d_means =  get_mean_3d(blobs_xy, depths_avg_new, viewpoint_cam.full_proj_transform, width, height)
-
-                # Adding neg gaussians
-
-                
+        # Code by lathika - test
+        test_each_iter_for_none(iteration, gaussians)        
 
         with torch.no_grad():
             # Progress bar
@@ -202,6 +184,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
+
+            """
+            # Code by lathika - For initializing the negative gaussians
+            # Detect and get neg gauss points
+            #add_neg_gauss_flage = False # Code by lathika to stop running the part below
+            if add_neg_gauss_flage:
+                if iteration % 30 == 0:     # This step is taken to reduce the number of images that will be processed for blob detection
+                                            # Every image with an interval of 30, will be selected. (We can change this)
+                    print(f"\n Going through neg gaus initialization at {iteration}")  # Test
+                    print(f"\n Num of gauss before adding neg gauss = {gaussians._xyz.shape[0]}")
+                    adding_neg_gauss_flag = True
+                    neg_gaus_3d_means, blob_scales_tensor, blob_rotation = get_new_neg_points(gt_image, viewpoint_cam, means_2D, depths)
+
+            """
 
             # Log and save
             training_report(log_to_wandb, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
@@ -237,6 +233,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+
+
+            # Code by lathika - For initializing the negative gaussians
+            # Detect and get neg gauss points
+            #add_neg_gauss_flage = False # Code by lathika to stop running the part below
+            if add_neg_gauss_flage:
+                if iteration % 30 == 0:     # This step is taken to reduce the number of images that will be processed for blob detection
+                                            # Every image with an interval of 30, will be selected. (We can change this)
+                    print(f"\n Going through neg gaus initialization at {iteration}")  # Test
+                    print(f"\n Num of gauss before adding neg gauss = {gaussians._xyz.shape[0]}")
+                    adding_neg_gauss_flag = True
+                    neg_gaus_3d_means, blob_scales_tensor, blob_rotation = get_new_neg_points(gt_image, viewpoint_cam, means_2D, depths)
+                    # Test
+                    neg_gauss_mask = torch.rand(neg_gaus_3d_means.shape[0]) < 0.1 # Getting only 10%
+                    neg_gaus_3d_means = neg_gaus_3d_means[neg_gauss_mask]
+                    blob_scales_tensor = blob_scales_tensor[neg_gauss_mask]
+                    blob_rotation = blob_rotation[neg_gauss_mask]
+
+
+            # Code by lathika
+            # Adding neg gaussians
+            if adding_neg_gauss_flag:
+                gaussians.add_neg_gauss(neg_gaus_3d_means, blob_scales_tensor, blob_rotation)
+                print(f"\n Num of gauss after adding neg gauss = {gaussians._xyz.shape[0]}\n")
+                adding_neg_gauss_flag = False
 
             # Optimizer step
             if iteration < opt.iterations:

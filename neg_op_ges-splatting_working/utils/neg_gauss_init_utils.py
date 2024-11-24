@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.feature import blob_dog
 import torch
+import math
 
 def knn_2d(blob_xy, gauss_xy, k):
     device = gauss_xy.device
@@ -33,18 +34,59 @@ def get_mean_3d(blobs_xy, depth, projection_full, w, h):
     """
     size = blobs_xy.shape[0]
     # Converting pixel values to ndc
-    blobs_xy_new = torch.ones_like(blobs_xy)
+    blobs_xy_new = torch.ones_like(blobs_xy).to(device='cpu')
     blobs_xy_new[:,0], blobs_xy_new[:,1] = pix2ndc(blobs_xy[:,0],w), pix2ndc(blobs_xy[:,1],h)
 
-    p = projection_full.T[torch.tensor([0,1,3])][:,:3]  # In 3d gaussian splatting, they have used column prioritizing
-    b = torch.ones(size,3)  # This is b matrix in Ax = b
-    b[:,:2] = blobs_xy_new.detach()*depth.reshape(size,1)
-    b[:,2] =  depth
-    b = b - projection_full.T[torch.tensor([0,1,3])][:,3]
+    p = projection_full.T[torch.tensor([0,1,3])][:,:3].cpu().to(dtype=torch.float)  # In 3d gaussian splatting, they have used column prioritizing
+    b = np.ones((size,3)) # This is b matrix in Ax = b
+    b[:,:2] = blobs_xy_new.detach()*depth.reshape(size,1).cpu().detach().numpy()
+    b[:,2] =  depth.cpu().detach().numpy()
+    b = b - projection_full.T[torch.tensor([0,1,3])][:,3].cpu().detach().numpy()
+    b = torch.tensor(b, dtype=torch.float)
     X = np.ones((size,3))
     for i in range(size):
         X[i], res, r, s = torch.linalg.lstsq(p, b[i], rcond=None) # Solving Ax = b for x
-    return torch.tensor(X, requires_grad=True) 
+    return torch.tensor(X) 
+
+
+# Optimized for cuda
+def get_mean_3d_cuda(blobs_xy, depth, projection_full, w, h):
+    """
+    Inputs:
+        blobs_xy - 2D pixel centroid values of blobs
+        depth - Average depth tensor (use knn to get neighbors and get an average depth value for blobs)
+        projection_full - Projection matrix of camera viewpoint (projection_mat @ view_mat)
+        w - Image width
+        h - Image height
+    Output:
+        X - 3D coordinates with respect to world coordinates
+    """
+    device = blobs_xy.device  # Assuming blobs_xy, depth, and projection_full are on the same device (CUDA)
+
+    size = blobs_xy.shape[0]
+    # Converting pixel values to ndc
+    blobs_xy_new = torch.ones_like(blobs_xy, device=device)
+    blobs_xy_new[:, 0], blobs_xy_new[:, 1] = pix2ndc(blobs_xy[:, 0], w), pix2ndc(blobs_xy[:, 1], h)
+
+    # Preparing matrices for Ax = b
+    p = projection_full.T[torch.tensor([0, 1, 3], device=device)][:, :3]  # In 3d gaussian splatting, they have used column prioritizing
+    b = torch.ones(size, 3, device=device)   # This is b matrix in Ax = b
+    b[:, :2] = blobs_xy_new * depth.view(size, 1)
+    b[:, 2] = depth
+    b = b - projection_full.T[torch.tensor([0, 1, 3], device=device)][:, 3]
+
+    # Solve Ax = b in batch mode
+    # p needs to be expanded to match the size of b for batch lstsq
+    p_batch = p.unsqueeze(0).expand(size, -1, -1)  # Expanding p to shape (size, 3, 3)
+    b_batch = b.unsqueeze(-1)  # Making b shape (size, 3, 1)
+
+    # Use torch.linalg.lstsq on CUDA with the `gels` driver (default for CUDA)
+    X= torch.linalg.lstsq(p_batch, b_batch).solution     # Solving Ax = b for x
+
+    # Remove the extra dimension added for lstsq compatibility
+    X = X.squeeze(-1)
+
+    return X
 
 
 def get_border_blob_mask(blobs_xy, w, h):
@@ -106,6 +148,62 @@ def detect_blobs_dog(image, min_blob_size, max_blob_size, num_intervals):
         cv2.circle(output_image, (int(x), int(y)), int(r), (0, 255, 0), 2)
 
     return blobs_new, output_image
+
+# Calculating the scaling factor and converting pixel radius into scalings
+def fov2focal(fov, pixels):
+    return pixels / (2 * math.tan(fov / 2))
+
+def get_scalings(viewpoint_cam, rad_pix, width, height, depth):
+    focal_len_x_pixels = fov2focal(viewpoint_cam.FoVx, width)
+    focal_len_y_pixels = fov2focal(viewpoint_cam.FoVy, height)
+    focal_len_pixels = 0.5*(focal_len_x_pixels + focal_len_y_pixels)  
+    scale_factor = depth / focal_len_pixels     # For pinhole camera
+    blob_scale = scale_factor*rad_pix
+    return blob_scale
+
+
+# Code by lathika - For initializing the negative gaussians
+# Detect and get neg gauss points
+def get_new_neg_points(gt_image, viewpoint_cam, means_2D, depths):
+    image_cpu_numpy = gt_image.clone().detach().cpu().numpy()   # Shape = (3,H,W)
+    image_cpu_numpy = np.transpose(image_cpu_numpy, axes=(1,2,0))
+    # Define blob detection parameters
+    min_blob_size = 5  # Minimum blob size (in pixels)
+    max_blob_size = 8  # Maximum blob size (in pixels)
+    num_intervals = 5  # Number of intervals to divide the size range
+    # Detect blobs 
+    blobs, _ = detect_blobs_dog(image_cpu_numpy, min_blob_size, max_blob_size, num_intervals)
+    blobs = torch.tensor(blobs, device="cuda")
+    blobs_xy = blobs[:,:2]
+
+    # Filtering the blobs closer to the edges
+    height = viewpoint_cam.image_height
+    width  = viewpoint_cam.image_width
+    blobs_mask = get_border_blob_mask(blobs_xy, width, height)
+    blobs_filtered = blobs[blobs_mask]
+    blobs_xy = blobs_filtered[:,:2]
+    blob_radii = blobs_filtered[:,2]
+    blob_rotation = torch.zeros(blobs_xy.shape[0],4)
+    blob_rotation[:,0] = 1
+
+    # Filter out (0,0) means_2d values (because gaussians are out of frustrum)
+    means_2D_mask = get_in_image_gaussian_mask(means_2D)
+    means_2D_new = means_2D[means_2D_mask]
+    depths_new = depths[means_2D_mask]
+    
+    # Calculating knn
+    knn_indices , _ = knn_2d(blobs_xy, means_2D_new, k=5)
+    depths_avg_new = torch.mean(depths_new[knn_indices],dim=1)
+
+    # Getting scales
+    blob_scales = get_scalings(viewpoint_cam, blob_radii, width, height, depths_avg_new)
+    blob_scales_tensor = torch.reshape(blob_scales,(blob_scales.shape[0],1)).repeat(1,3)
+
+    # Getting 3d coordinates
+    neg_gaus_3d_means =  get_mean_3d_cuda(blobs_xy, depths_avg_new, viewpoint_cam.full_proj_transform, width, height)
+
+    return neg_gaus_3d_means, blob_scales_tensor, blob_rotation
+
 
 """
 # Example of how to use the function

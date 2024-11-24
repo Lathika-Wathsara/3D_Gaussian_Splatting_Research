@@ -222,6 +222,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
+	bool* ctn_gauss_mask,	// Code by lathika
 	const float* cov3D_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
@@ -249,6 +250,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// this Gaussian will not be processed further.
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
+	ctn_gauss_mask[idx] = false; // Code by lathika (This will be updated in render, for backward pass)
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
@@ -331,6 +333,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
+	bool* ctn_gauss_mask,	// Code by lathika
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	int* __restrict__ unwanted_gauss,	// Code by lathika
@@ -341,8 +344,8 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* alpha_sum,	// Code by lathika
-	uint32_t* contrib_count)	// Code by lathika
+	float*  __restrict__  alpha_sum,	// Code by lathika
+	uint32_t*  __restrict__ contrib_count)	// Code by lathika
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -364,7 +367,7 @@ renderCUDA(
 	int toDo = range.y - range.x;
 
 	// Code by lathika
-	const int Max_neg_arr_size =BLOCK_SIZE*3;
+	const int Max_neg_arr_size = BLOCK_SIZE*8 ;//Changed const int to int and   BLOCK_SIZE*3 (not enough) into (( range.y - range.x + 32 -1)/32)*32 into BLOCK_SIZE*5 changed by lathika
 	//uint32_t neg_gaus_arr[Max_neg_arr_size];
 	int neg_gaus_idx_arr[Max_neg_arr_size];
 	float neg_gaus_alpha_arr[Max_neg_arr_size];
@@ -417,6 +420,9 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 
+			// Code by lathika
+			
+
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
 			float2 xy = collected_xy[j];
@@ -441,14 +447,14 @@ renderCUDA(
 			} */
 
 			// Code by lathika
+			bool is_neg_gauss_used = false;
 			float alpha;	// Since alpha is use in two places, I initially declared it here
 			// If a gaussian is negetive, add it to the array, and continue (No need to run the parts bellow)
 			if (con_o.w < 0.0f)
-			{		
-					printf("check neg gause breach");	// Code by lathika test
-					alpha = max(-0.99f, con_o.w * exp(power));
-					if (alpha > -1.0f / 255.0f)
-						continue;
+			{	
+				alpha = max(-0.99f, con_o.w * exp(power));
+				if (alpha > -1.0f / 255.0f)
+					continue;
 				if (pointer < Max_neg_arr_size - 1) {  // Check for array bounds before incrementing
 					pointer++;
 					num_neg_gauss++;
@@ -459,7 +465,12 @@ renderCUDA(
 				} else {
 					// Handle overflow case: you could break, skip, or flag this situation
 					// You could set a flag to track that you've run out of space
-					printf("Warning: Maximum number of negative Gaussians reached. Skipping additional Gaussians.\n");
+					//printf("Pointer val = %d \n",pointer);
+					//printf("num_neg_gauss = %d \n",num_neg_gauss);
+					//printf("Total gauss for a block = %d\n", range.y - range.x);
+					//printf("Warning: Maximum number of negative Gaussians reached. Skipping additional Gaussians.\n");
+					pointer = -1;	// Code by lathika test 
+					num_neg_gauss = 0;	// Code by lathika test
 				}
 				continue;
 				}
@@ -467,7 +478,7 @@ renderCUDA(
 			alpha = min(0.99f, con_o.w * exp(power));
 			if (num_neg_gauss !=0)
 			{	
-				printf("check num_neg_gauss inside");	// Code by lathika test
+				
 				float pos_var = collected_look_at_var[j];
 				float pos_depth = collected_depths[j];
 				float T_neg = 1.0f;
@@ -476,8 +487,13 @@ renderCUDA(
 					float neg_var = neg_gaus_look_at_var[u];
 					float neg_depth = neg_gaus_depths[u];
 					float neg_alpha = neg_gaus_alpha_arr[u];
+					//printf("pos_depth = %.4f\n",pos_depth);
+					//printf("neg_depth = %.4f\n",neg_depth);
+					//printf("glm::sqrt(pos_var) = %.4f \n",glm::sqrt(pos_var));
+					//printf("glm::sqrt(neg_var) = %.4f\n",glm::sqrt(neg_var));
 					if (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
-					{
+					{	
+						//printf("\n Enter pointer reduce\n");
 						if (pointer == u)
 						{
 							pointer = -1;
@@ -489,8 +505,8 @@ renderCUDA(
 							//thrust:: copy(neg_gaus_look_at_var+u, neg_gaus_look_at_var + pointer +1, neg_gaus_look_at_var);
 							//thrust:: copy(neg_gaus_depths + u +1, neg_gaus_depths + pointer +1, neg_gaus_depths);
 							for (int v = u+1; v < pointer+1; v++){
-								int idx = neg_gaus_idx_arr[v];
-								unwanted_gauss[idx] = 1;	// 1 means, this gaussian should be considered
+								//int idx = neg_gaus_idx_arr[v];
+								//unwanted_gauss[idx] = 1;	// Commented by lathika , this is done below after confirming thatthe pos gauss is used
 								neg_gaus_idx_arr[v-u-1] = neg_gaus_idx_arr[v];
 								neg_gaus_look_at_var[v-u-1] = neg_gaus_look_at_var[v];
 								neg_gaus_depths[v-u-1] = neg_gaus_depths[v];
@@ -498,6 +514,7 @@ renderCUDA(
 							}
 							pointer = pointer -u -1;
 							num_neg_gauss = pointer + 1;
+							is_neg_gauss_used = true;
 						}
 						break;
 					}
@@ -507,18 +524,21 @@ renderCUDA(
 						T_neg = T_neg*(1 + neg_alpha);
 					}
 				}
+				ctn_gauss_mask[collected_id[j]] = alpha < 1.0f / 255.0f && alpha + 1.0f - T_neg >  1.0f / 255.0f;	// Code by lathika
+				
 			}	
 
 			// Code by lathika
 			atomicAdd(&alpha_sum[collected_id[j]], alpha);  // Accumulate alpha
 			atomicAdd(&contrib_count[collected_id[j]], 1);  // Count contributions
 
+
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
 			// float alpha = min(0.99f, con_o.w * exp(power));	// Code by lathika
-			if (alpha < 1.0f / 255.0f)
+			if (alpha < 1.0f / 255.0f)	
 				continue;
 			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
@@ -526,9 +546,6 @@ renderCUDA(
 				done = true;
 				continue;
 			}
-
-			// Code by lathika
-			//unwanted_gauss[collected_id[j]]=1;	// If a gaussian has a valid positive opacity, then add it to the filter
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
@@ -541,6 +558,18 @@ renderCUDA(
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
+
+			// Code by lathika - If the neg gaussed were used - if the positive gaussians that were effected by the neg gauss were used (not continued the loop)
+								// Then the corresponding negative gauss should considered as wanted gauss
+			unwanted_gauss[collected_id[j]]=1;	// If a positive gaussian has a valid positive opacity, then add it to the filter
+			if (is_neg_gauss_used){
+				for (int u= pointer; u > -1; u--){
+					int idx = neg_gaus_idx_arr[u];
+					unwanted_gauss[idx]=1;	// 1 means, this gaussian should be considered
+				}
+			}
+			
+
 		}
 	}
 
@@ -562,6 +591,7 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 	const uint2* ranges,
 	const uint32_t* point_list,
 	int W, int H,
+	bool * ctn_gauss_mask,	// Code by lathika
 	const float2* means2D,
 	const float* colors,
 	int* unwanted_gauss,	// Code by lathika
@@ -581,13 +611,14 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 	int n_gaussians = P;
 	int* unwanted_gauss_both;
 	// Allocate alpha_sum & contrib_count as arrays on the device
-	cudaMalloc(&alpha_sum, n_gaussians * sizeof(float));	// alpha_sum - will store the sum of alpha values to calculate the average and add gaussians to prune.
-	cudaMalloc(&contrib_count, n_gaussians * sizeof(uint32_t)); // contrib_count - will store the number of contribution for each gaussian
+	gpuErrorchk(cudaMalloc(&alpha_sum, n_gaussians * sizeof(float)));	// alpha_sum - will store the sum of alpha values to calculate the average and add gaussians to prune.
+	gpuErrorchk(cudaMalloc(&contrib_count, n_gaussians * sizeof(uint32_t))); // contrib_count - will store the number of contribution for each gaussian
 	// Initializing 
-	cudaMemset(alpha_sum, 0, n_gaussians*sizeof(float));
-	cudaMemset(contrib_count, 0, n_gaussians*sizeof(uint32_t));
+	gpuErrorchk(cudaMemset(alpha_sum, 0, n_gaussians*sizeof(float)));
+	gpuErrorchk(cudaMemset(contrib_count, 0, n_gaussians*sizeof(uint32_t)));
 
-	cudaMallocManaged(&unwanted_gauss_both, n_gaussians * sizeof(int));	// Allocate Unified Memory for GPU/Host updates
+	gpuErrorchk(cudaMallocManaged(&unwanted_gauss_both, n_gaussians * sizeof(int)));	// Allocate Unified Memory for GPU/Host updates
+	gpuErrorchk(cudaMemset(unwanted_gauss_both, 0, n_gaussians * sizeof(int)));
 	/*// Initialize unwanted_gauss_both on the host - Remove this part if wants
     for (int i = 0; i < n_gaussians; i++) {
         unwanted_gauss_both[i] = 0;
@@ -597,6 +628,7 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 		ranges,
 		point_list,
 		W, H,
+		ctn_gauss_mask,	// Code by lathika
 		means2D,
 		colors,
 		unwanted_gauss_both,	// Code by lathika
@@ -611,35 +643,36 @@ void FORWARD::render( int P,	// Code by lathika (int P, to get the numper of gau
 		contrib_count);	// Code by lathika
 
 	// Code by lathika
-	cudaDeviceSynchronize(); // Wait for GPU to finish
+	// Check for kernel launch errors
+    gpuErrorchk(cudaPeekAtLastError());
+    gpuErrorchk(cudaDeviceSynchronize()); // Ensure kernel execution is complete - Wait for GPU to finish
 	// Host arrays to store alpha_sum and contrib_count
+
 	float* h_alpha_sum = new float[n_gaussians];
 	uint32_t* h_contrib_count = new uint32_t[n_gaussians];
-	// Copy data from device to host
-	cudaMemcpy(h_alpha_sum, alpha_sum, n_gaussians * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(h_contrib_count, contrib_count, n_gaussians * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-	// Copy data from unwanted_gauss_both (GPU/Unified Memory) to unwanted_gauss (Host)
-	cudaMemcpy(unwanted_gauss, unwanted_gauss_both, n_gaussians * sizeof(int), cudaMemcpyDeviceToHost);
-	
+
+    // Copy results back from device to host
+    gpuErrorchk(cudaMemcpy(h_alpha_sum, alpha_sum, n_gaussians * sizeof(float), cudaMemcpyDeviceToHost));
+    gpuErrorchk(cudaMemcpy(h_contrib_count, contrib_count, n_gaussians * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    gpuErrorchk(cudaMemcpy(unwanted_gauss, unwanted_gauss_both, n_gaussians * sizeof(int), cudaMemcpyDeviceToHost));
+
 	// Calculating the average and updating the filter
+	float alpha_threshold = 1.0f / 255.0f;// Change this accordingly
 	for (int i = 0; i < n_gaussians; i++) {
 		if (h_contrib_count[i] > 0 ) {  // Make sure there's at least one contribution
 			float avg_alpha = h_alpha_sum[i] / h_contrib_count[i];
-			float alpha_threshold = 1.0f / 255.0f;// Change this accordingly
-			
 			if (avg_alpha > alpha_threshold) {  // Apply your threshold
 				unwanted_gauss[i] = 1;  // Mark Gaussian as wanted. If a gaussian has a valid positive opacity, then add it to the filter
 			}
 		}
 	}
-	//std::cout << "Check point 10" << std::endl;
 
 	// cudaMemcpy(d_unwanted_neg_gauss, unwanted_neg_gauss, n_gaussians * sizeof(int), cudaMemcpyHostToDevice);
 
 	// Code by lathika - Free memory after kernel execution
-	cudaFree(alpha_sum);
-	cudaFree(contrib_count);
-	cudaFree(unwanted_gauss_both);
+    gpuErrorchk(cudaFree(alpha_sum));
+    gpuErrorchk(cudaFree(contrib_count));
+    gpuErrorchk(cudaFree(unwanted_gauss_both));
 	// Free host memory
 	delete[] h_alpha_sum;
 	delete[] h_contrib_count;
@@ -653,6 +686,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
+	bool* ctn_gauss_mask,	// Code by lathika
 	const float* cov3D_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
@@ -681,6 +715,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		opacities,
 		shs,
 		clamped,
+		ctn_gauss_mask,	// Code by lathika
 		cov3D_precomp,
 		colors_precomp,
 		viewmatrix, 

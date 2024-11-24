@@ -26,7 +26,10 @@ namespace BACKWARD
 		const uint32_t* point_list,
 		int W, int H,
 		const float* bg_color,
+		const bool* ctn_gauss_mask, // Code by lathika
 		const float2* means2D,
+		const float* depths,	// Code by lathika
+		const float* look_at_var_arr,	// Code by lathika
 		const float4* conic_opacity,
 		const float* colors,
 		const float* final_Ts,
@@ -43,6 +46,7 @@ namespace BACKWARD
 		const int* radii,
 		const float* shs,
 		const bool* clamped,
+		const float4* conic_opacity,	// Code by lathika
 		const glm::vec3* scales,
 		const glm::vec4* rotations,
 		const float scale_modifier,

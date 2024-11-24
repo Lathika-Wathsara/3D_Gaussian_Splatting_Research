@@ -406,7 +406,7 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
 
-        # Code byb lathika
+        # Code by lathika
         new_isPositive = self.gs_isPositive[selected_pts_mask].repeat(N,1)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_isPositive) # Code by lathika added new_isPositive
@@ -447,7 +447,7 @@ class GaussianModel:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
-        #print(f"prune mask size = {prune_mask.size()}")
+        #print(f"prune mask size = {prune_mask.size()}") # Code by lathika - test
         self.prune_points(prune_mask)
 
         torch.cuda.empty_cache()
@@ -461,13 +461,18 @@ class GaussianModel:
         self.prune_points(unwanted_gauss_filter)
 
     # Code by lathika - add neg gaussians
-    def add_neg_gauss(self, neg_xyz, neg_scale, neg_rotation ):
+    def add_neg_gauss(self, neg_xyz, neg_scales, neg_rotations ):
         size = neg_xyz.shape[0]
-        features_dc_neg = torch.zeros(size,1,3)
-        features_rest_neg =  torch.zeros(size,15,3)
-        
+        # When we wrap a tensor with nn.Parameter, it automatically assing "requires_grad = True"
+        neg_xyz = nn.Parameter(neg_xyz.clone().detach().to(dtype=torch.float, device='cuda'))
+        neg_features_dc = nn.Parameter(torch.zeros((size,1,3),dtype=torch.float, device='cuda'))
+        neg_features_rest =  nn.Parameter(torch.zeros((size,15,3),dtype=torch.float, device='cuda'))
+        neg_opacities = nn.Parameter((4.0*torch.randn(size,1)-2.0).detach().to(dtype=torch.float, device='cuda'), requires_grad=True) # Giving random values in the range of -2, +2. These values will be mapped from "get_opacity" into (-1,1) interval.
+        neg_scales = nn.Parameter(neg_scales.clone().detach().to(dtype=torch.float, device='cuda'))
+        neg_rotations = nn.Parameter(neg_rotations.clone().detach().to(dtype=torch.float, device='cuda'))
+        neg_isPositive = torch.zeros(size,1, dtype = torch.bool, device = 'cuda')    # Array full of "False"
 
-        return 0
+        self.densification_postfix(neg_xyz, neg_features_dc, neg_features_rest, neg_opacities, neg_scales, neg_rotations, neg_isPositive)
 
 
     # Code by lathika - test 
