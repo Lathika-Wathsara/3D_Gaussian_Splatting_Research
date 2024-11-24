@@ -16,5 +16,6 @@
 #define BLOCK_X 16
 #define BLOCK_Y 16
 
+constexpr float std_diff_coff = 0.02f; // Code by lathika - initially 2, but seems too large, need proper conversion
 
 #endif

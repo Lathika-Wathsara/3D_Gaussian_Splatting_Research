@@ -491,7 +491,7 @@ renderCUDA(
 					//printf("neg_depth = %.4f\n",neg_depth);
 					//printf("glm::sqrt(pos_var) = %.4f \n",glm::sqrt(pos_var));
 					//printf("glm::sqrt(neg_var) = %.4f\n",glm::sqrt(neg_var));
-					if (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
+					if (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
 					{	
 						//printf("\n Enter pointer reduce\n");
 						if (pointer == u)

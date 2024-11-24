@@ -679,9 +679,9 @@ renderCUDA(
 				int mpr_temp = closest_pos_range_idx_ptr;
 				int mpr_idx = closest_pos_glob_idx;
 				int n_idx = collected_id[j];	// Closest neg gauss index
-				int c=0; // test
+				int a=0; // test
 				while (mpr_temp < range.y )	// To get the maximum positive gaussian that will be effected by this neg gauss set
-				{	
+				{
 					int mpr_idx = point_list[mpr_temp];
 					pos_depth = depths[mpr_idx];
 					pos_var = look_at_var_arr[mpr_idx];
@@ -689,42 +689,56 @@ renderCUDA(
 					if (con_o_p.w > 0.0f)
 					{
 						mpr = mpr_temp;
-						c++; // Test
 					}
 					neg_depth = depths[n_idx];
 					neg_var = look_at_var_arr[n_idx]; 
-					if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
-						//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), c);//Test
-						break;
+					if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
+					{	//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
+						break;}
 					mpr_temp ++;
+
+					// Test
+					if (a>100){	
+						printf("Loop_1_a = %d",a);
+						printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var),dep_diff, std*coeff,std_diff_coff, count = %f, %f, %f, %f,%f,%f,%f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var),abs(pos_depth-neg_depth),std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)),std_diff_coff, a);//Test
+					}
+					a++;
+
 				}
 
 				T_final_neg = 1.0f;;
-				int mlrp_n = collected_range_idx[j]; // main loop neg gauss range index pointer (Will be updated in the loop below)
+				int mlrp_n = collected_range_idx[j]; 				// main loop neg gauss range index pointer (Will be updated in the loop below)
 				int closest_neg_range_idx_ptr = collected_range_idx[j]; 	// Closest negative gaussian pointer
-				pos_depth = depths[closest_pos_glob_idx];	// Closest pos gauss depth
+				pos_depth = depths[closest_pos_glob_idx];			// Closest pos gauss depth
 				pos_var = look_at_var_arr[closest_pos_glob_idx];	// Closest pos gauss var
-				int mlgi_n ;				// main loop neg gauss global index
+				int mlgi_n ;										// main loop neg gauss global index
 				float dL_dAccumAlpha_p = 0.0f;
+				int b =0; // Test
 				// Looping through neg gauss and getting the least affected neg gauss and calculating T_final_neg
 				// And this will update mlrp_n
-
-				// Test ///////////////////////-----------------Issue is in the loop below
 				while(mlrp_n >= range.x)
 				{	
 					mlgi_n = point_list[mlrp_n];
 					neg_depth = depths[mlgi_n];
 					neg_var = look_at_var_arr[mlgi_n];
 					con_o_n = conic_opacity[mlgi_n];
-					// Test --- Even after breaking here, It gives illigal memory access
-					if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)) || con_o_n.w > 0.0f)
+					
+					// Test
+					
+					// if (b>100){	
+					// 	printf("Loop_2_b = %d",b);
+					// 	printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), b);//Test
+					// }
+					// b++;
+
+
+					if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)) || con_o_n.w > 0.0f)
 					{
 						mlrp_n++;
 						//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count_a = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
 						break;
 					}
 					
-
 					xy = points_xy_image[mlgi_n];
 					d = { xy.x - pixf.x, xy.y - pixf.y };
 					
@@ -737,8 +751,8 @@ renderCUDA(
 					T_final_neg = T_final_neg*(1 + neg_alpha);		
 				}
 				
-				int lrp_p = closest_pos_range_idx_ptr; // loop pos gauss range index pointer
-				int lrp_n = mlrp_n;	// loop neg gauss range index pointer
+				int lrp_p = closest_pos_range_idx_ptr; 	// loop pos gauss range index pointer
+				int lrp_n = mlrp_n;						// loop neg gauss range index pointer
 				int lgi_n;	// loop_glob_idx_negative
 				int lgi_p;	// loop_glob_idx_positive
 				int lr_pin_p = closest_pos_range_idx_ptr;	// loop range poisitive gaussian pin
@@ -746,10 +760,20 @@ renderCUDA(
 				float T_temp_n = T_final_neg;
 				int dlaa_p = closest_pos_pointer - 1;	// Possitive dL_dAccumAlpha pointer (index)
 				
+				int c = 0; // Test
+				printf("mlrp_n = %d",mlrp_n);
 				// For each neg gauss (g0) starting from left (least) updating gradians of neg gauss starting from the closest neg gauss (to pos gauss) to it (g0), 
 				// w.r.t the positive gaussians in it's (g0) range
 				while(mlrp_n <= closest_neg_range_idx_ptr)
 				{	
+					// Test
+					// if (c>1000){	
+					// 	printf("Loop_3_c = %d",c);
+					// 	printf("closest_neg_range_idx_ptr = %d, mlrp_n =%d",closest_neg_range_idx_ptr, mlrp_n);
+					// }
+					// c++;
+
+
 					lrp_p = lr_pin_p;
 					lrp_n = mlrp_n;
 					mlgi_n = point_list[mlrp_n];
@@ -765,9 +789,18 @@ renderCUDA(
 					if (power > 0.0f || neg_alpha > -1.0f / 255.0f)
 						continue;
 					
+					int dd = 0; // Test
 					// Socond loop to loop through positive gauss until the corresponding limit and mark the pin
-					while (lrp_p <= mpr)	// mpr is the pos gauss pointer in range. This pos gauss is the last (with max distance) in the active range of the closest neg gauss (closest to pos gausses) 
+					// mpr is the pos gauss pointer in range. This pos gauss is the last (with max distance) in the active range of the closest neg gauss (closest to pos gausses) 
+					while (lrp_p <= mpr)	
 					{	
+						// Test
+						// if (dd>100){	
+						// 	printf("Loop_4_d = %d",dd);
+						// }
+						// dd++;
+
+
 						lgi_p = point_list[lrp_p];
 						pos_depth = depths[lgi_p];
 						pos_var = look_at_var_arr[lgi_p];
@@ -791,22 +824,30 @@ renderCUDA(
 							break;
 						}
 
-						if  (abs(pos_depth-neg_depth) > 2*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
+						if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
 						{
 							lr_pin_p = lrp_p-1;	// We are incrementing lrp_p before, so we need to reduce one.
 							T_final_neg = T_final_neg/(1 + neg_alpha);
 							break;
 						}
 						if (dlaa_p >= H * W * 1 * BLOCK_SIZE || dlaa_p<0) // Test
-								printf("closest_pos_pointer going out of range 3"); // Test
+							printf("closest_pos_pointer going out of range 3"); // Test
 						dL_dAccumAlpha_p = pos_dL_dAcummApha_arr[dlaa_p];	// This array is defined in the device. 
 																			//It stored dL_dAccumAlpha for each poss gauss in each thread. (so uses a different index)
 						dlaa_p--; 	// dL_dalpha (accum alpha if affected by neg gauss) is updated in the array only for the positive gaussians
 						
+						int e = 0; // Test
 						// Grad update loop for neg gaussians
 						while(lrp_n <= closest_neg_range_idx_ptr)
 						{
-							//printf("Updating neg gauss"); // Test - This runs
+							// Test
+							// if (e>100){	
+							// 	printf("Loop_5_e = %d",e);
+							// }
+							// e++;
+
+
+
 							lgi_n = point_list[lrp_n];
 							lrp_n ++;
 							xy = points_xy_image[lgi_n];
@@ -841,7 +882,6 @@ renderCUDA(
 
 				continue;
 			}
-
 
 			const float alpha = min(0.99f, con_o.w * G);
 			if (alpha < 1.0f / 255.0f)

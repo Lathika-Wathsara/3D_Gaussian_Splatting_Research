@@ -118,12 +118,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        if iteration>1000: # Code by lathika - test 
-            print(f"check 1 = {iteration}")
         loss.backward()
 
         iter_end.record()
 
+        # # Code by lathika - Test
+        # if iteration==1000:
+        #     print(f"max depth = {torch.max(depths)}")
+        #     print(f"min depth = {torch.min(depths)}")
+        #     print(f"num depth = {depths.shape[0]}")
+        #     break
 
         # Code by lathika
         if iteration >=1000 and iteration%250==0: # Changed for testing   # After 1000 iterations, neg gaussians are added with 500 intervals
@@ -134,8 +138,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             unwanted_gauss_total_acum = unwanted_gauss_acum
 
         # Code by lathika - test 
-        if iteration>1000:
-            print(f"check 2 = {iteration}")
         if iteration%1000==0:
             print(iteration)
         it_1 = 7000
