@@ -1,0 +1,2 @@
+Worked onm ths untile 28/11/2024
+but getting an error in backward.cu (illegal memory access)

@@ -540,6 +540,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
+	int P, 	// Code by lathika Test
 	int W, int H,
 	const float* __restrict__ bg_color,
 	const bool* ctn_gauss_mask, // Code by lathika
@@ -592,7 +593,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
-	__shared__ float collected_range_idx[BLOCK_SIZE]; // Code by lathika
+	__shared__ float collected_range_idx[BLOCK_SIZE]; // Code by lathika (again added volatile)
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
@@ -633,7 +634,8 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-			collected_range_idx[block.thread_rank()] = range.y - progress - 1; // Code by lathika
+			const int range_id =  range.y - progress - 1;		// Code by lathika
+			collected_range_idx[block.thread_rank()] = range_id; // Code by lathika
 		}
 		block.sync();
 
@@ -663,12 +665,14 @@ renderCUDA(
 			// Code by lathika
 			if (con_o.w < 0.0f)		// neg gauss detected
 			{	
+				int test_collected_range_idx =collected_range_idx[j];//Test  range.y - progress - 1
+				int test_coll_id_1 = collected_id[j]; // Test
+
 				neg_alpha = max(-0.99f, con_o.w * G);
 				if (!neg_gauss_loop || neg_alpha > -1.0f / 255.0f)
-					continue;
+					{continue;}
 				neg_gauss_loop = false;
 				
-
 				float neg_depth;
 				float neg_var;
 				float pos_depth;
@@ -679,77 +683,201 @@ renderCUDA(
 				int mpr_temp = closest_pos_range_idx_ptr;
 				int mpr_idx = closest_pos_glob_idx;
 				int n_idx = collected_id[j];	// Closest neg gauss index
-				int a=0; // test
-				while (mpr_temp < range.y )	// To get the maximum positive gaussian that will be effected by this neg gauss set
+				// Check If neg gauss is in the range
+				pos_depth = depths[mpr_idx];
+				pos_var = look_at_var_arr[mpr_idx];
+				con_o_p = conic_opacity[mpr_idx]; 
+				neg_depth = depths[n_idx];
+				neg_var = look_at_var_arr[n_idx]; 
+				if (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var))||con_o_p.w < 0.0f)
 				{
-					int mpr_idx = point_list[mpr_temp];
-					pos_depth = depths[mpr_idx];
-					pos_var = look_at_var_arr[mpr_idx];
-					con_o_p = conic_opacity[mpr_idx]; 
-					if (con_o_p.w > 0.0f)
+					continue;
+				}
+				int a=0; // test
+				
+				while (mpr_temp < range.y )	// To get the maximum positive gaussian that will be effected by this neg gauss set
+				{	
+					if (mpr_temp== range.y) // As a solution - might execute witrh errors if not
 					{
-						mpr = mpr_temp;
+						break;
 					}
-					neg_depth = depths[n_idx];
-					neg_var = look_at_var_arr[n_idx]; 
+
+					//Test
+					// if (mpr_temp>=range.y || mpr_temp<range.x)
+					// 	{printf("mpr_temp = %d, range.y = %d,  range.x = %d ",mpr_temp, range.y, range.x);}
+
+					mpr_idx = point_list[mpr_temp];
+
+					// Test ------ Above clear
+					//printf("mpr_temp = %d, range.y = %d,  range.x = %d , mpr_idx=%d",mpr_temp, range.y, range.x, mpr_idx);// Test
+					
+					//if (mpr_idx>=30314)//Test
+						//printf("--mpr_idx = %d----",mpr_idx);
+					//printf("---mpr_idx = %d----",mpr_idx);
+					pos_depth = depths[mpr_idx];
+					//printf("...pos_depth = %f, mpr_idx = %d...",pos_depth, mpr_idx);// Test
+					pos_var = look_at_var_arr[mpr_idx];
+					//printf("pos_var = %f",pos_var);// Test
+					con_o_p = conic_opacity[mpr_idx]; 
+					//printf("con_o_p.w = %f",con_o_p.w);// Test
+
+					// mpr_temp++;// Test
+					// continue;//Test
 					if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)))
 					{	//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
-						break;}
+						break;
+						}
+
+					mpr = (con_o_p.w > 0.0f) ? mpr_temp: mpr;
+
 					mpr_temp ++;
 
 					// Test
-					if (a>100){	
-						printf("Loop_1_a = %d",a);
-						printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var),dep_diff, std*coeff,std_diff_coff, count = %f, %f, %f, %f,%f,%f,%f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var),abs(pos_depth-neg_depth),std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)),std_diff_coff, a);//Test
-					}
-					a++;
-
+					// if (a>100){	
+					// 	printf("Loop_1_a = %d",a);
+					// 	printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var),dep_diff, std*coeff,std_diff_coff, count = %f, %f, %f, %f,%f,%f,%f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var),abs(pos_depth-neg_depth),std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)),std_diff_coff, a);//Test
+					// }
+					a++;// Test
 				}
+				//printf("loop pass a=%d ,mpr_temp = %d, range.y = %d,  range.y = %d , mpr_idx=%d",a,mpr_temp, range.y, range.x, mpr_idx);
+				//continue;// Test - illegal mem access above
 
+				int test_collected_range_idx_2 = collected_range_idx[j];//Test
 				T_final_neg = 1.0f;;
-				int mlrp_n = collected_range_idx[j]; 				// main loop neg gauss range index pointer (Will be updated in the loop below)
+				volatile int mlrp_n = collected_range_idx[j]; 				// main loop neg gauss range index pointer (Will be updated in the loop below) 
 				int closest_neg_range_idx_ptr = collected_range_idx[j]; 	// Closest negative gaussian pointer
 				pos_depth = depths[closest_pos_glob_idx];			// Closest pos gauss depth
 				pos_var = look_at_var_arr[closest_pos_glob_idx];	// Closest pos gauss var
 				int mlgi_n ;										// main loop neg gauss global index
 				float dL_dAccumAlpha_p = 0.0f;
-				int b =0; // Test
+				int b = 0; // Test
+				
+				// test codes
+				int test_collected_range_idx_3 = collected_range_idx[j];//Test
+				int test_coll_id_2 = collected_id[j]; // Test
+				int test_coll_id_3 = point_list[test_collected_range_idx_2]; // Test
+				int test_coll_id_4 = point_list[mlrp_n]; // test
+				int test_coll_id_5 = point_list[range.y - progress - 1]; // Test
+				int test_coll_id_6 = point_list[closest_neg_range_idx_ptr]; // Test
+				int test_coll_id_7 = point_list[test_collected_range_idx]; // Test
+				//printf("test_coll_id_1 =%d, test_coll_id_2=%d, test_coll_id_3 =%d, test_coll_id_4=%d, test_coll_id_5 =%d",test_coll_id_1,test_coll_id_2,test_coll_id_3,test_coll_id_4,test_coll_id_5);
+				//printf("mlrp_n out of bounds: %d, valid range: [%d, %d], collected_range_idx_fixed[%d] =%d, collected_range_idx[%d] =%d , test_coll_r_i =%d, test_coll_r_i_2 =%d, test_coll_r_i_3 =%d, range_id=%d\n",mlrp_n,  range.x, range.y,j,closest_neg_range_idx_ptr, j,collected_range_idx[j],test_collected_range_idx,test_collected_range_idx_2,test_collected_range_idx_3,range.y - progress - 1);//Test
+				// Note:-
+				//mlrp_n : 62327, valid range: [62282, 62409], collected_range_idx_fixed[81] =62327, collected_range_idx[81] =0 , test_coll_r_i =1089367776, test_coll_r_i_2 =62242, test_coll_r_i_3 =62327, range_id=62327
+				// Here test_collected_range_idx_2 is reducing (...62243,62242,62241..)
+				// mlrp_n, closest_neg_range_idx_ptr, test_collected_range_idx_3 and  range.y - progress - 1 remains at the same value (for a block i think) =62327
+				// test_collected_range_idx which is, test_collected_range_idx = range.y - progress - 1; stays in a large value like 1089367776 (for ablock i think)
+				// But this is not the case for pos gauss part, every where collected_id[j] gives the same value, 
+				// in neg gaus also collected_id[j] stays the same ex- test_coll_id_1 =30095, test_coll_id_2=30095
+				// test_coll_id_1 =30082, test_coll_id_2=30082, test_coll_id_3 =30082, test_coll_id_4=30082, test_coll_id_5 =13691
+				// As for the conclusion here, using collected_range_idx[j] is better than range.y - progress - 1
+				// But in the following loop
+				// if (mlrp_n < range.x || mlrp_n >= range.y)
+				// 	{
+				// 		printf("mlrp_n out of bounds: %d, valid range: [%d, %d], collected_range_idx_fixed[%d] =%d, collected_range_idx[%d] =%d , test_coll_r_i =%d, test_coll_r_i_2 =%d, test_coll_r_i_3 =%d, range_id=%d\n",mlrp_n,  range.x, range.y,j,closest_neg_range_idx_ptr, j,collected_range_idx[j],test_collected_range_idx,test_collected_range_idx_2,test_collected_range_idx_3,range.y - progress - 1);
+				// 		printf("test_coll_id_1 =%d, test_coll_id_2=%d, test_coll_id_3 =%d, test_coll_id_6=%d,test_coll_id_7=%d \n",test_coll_id_1,test_coll_id_2,test_coll_id_3,test_coll_id_6, test_coll_id_7);// Test
+				// 		break; // Or handle error gracefully
+				// 	}
+				// This code gives,
+				// mlrp_n out of bounds: -1, valid range: [0, 150], collected_range_idx_fixed[71] =78, collected_range_idx[71] =0 , test_coll_r_i =1079214080, test_coll_r_i_2 =78, test_coll_r_i_3 =78, range_id=78
+				// test_coll_id_1 =19272, test_coll_id_2=19272, test_coll_id_3 =19272, test_coll_id_6=19272,test_coll_id_7=19272 
+				// Here range.y - progress - 1, closest_neg_range_idx_ptr, test_collected_range_idx_2, test_collected_range_idx_3 gives the same vale 78
+				// mlrp_n has gone out of range (because decrement issue)
+				// test_collected_range_idx give 0 ???? (But in this test there were no illegal mem issue????)
+
+
+				//Test illegal mem access in the below loop
+
 				// Looping through neg gauss and getting the least affected neg gauss and calculating T_final_neg
 				// And this will update mlrp_n
 				while(mlrp_n >= range.x)
 				{	
-					mlgi_n = point_list[mlrp_n];
-					neg_depth = depths[mlgi_n];
-					neg_var = look_at_var_arr[mlgi_n];
-					con_o_n = conic_opacity[mlgi_n];
-					
+	
+					if (mlrp_n < range.x || mlrp_n >= range.y)// Test - seems to be the solution 
+					{
+						break;
+					}
 					// Test
-					
 					// if (b>100){	
 					// 	printf("Loop_2_b = %d",b);
 					// 	printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), b);//Test
 					// }
 					// b++;
 
+					// Below is the original part but check the bellow test part also, there is an updated one
+					// if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)) || con_o_n.w > 0.0f)
+					// {
+					// 	mlrp_n++;
+					// 	//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count_a = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
+					// 	break;
+					// }
 
-					if  (abs(pos_depth-neg_depth) > std_diff_coff*(glm::sqrt(pos_var)+glm::sqrt(neg_var)) || con_o_n.w > 0.0f)
+					// Test
+					if (mlrp_n < range.x || mlrp_n >= range.y)
+					{
+						printf("mlrp_n out of bounds: %d, valid range: [%d, %d], collected_range_idx_fixed[%d] =%d, collected_range_idx[%d] =%d , test_coll_r_i =%d, test_coll_r_i_2 =%d, test_coll_r_i_3 =%d, range_id=%d\n",mlrp_n,  range.x, range.y,j,closest_neg_range_idx_ptr, j,collected_range_idx[j],test_collected_range_idx,test_collected_range_idx_2,test_collected_range_idx_3,range.y - progress - 1);
+						printf("test_coll_id_1 =%d, test_coll_id_2=%d, test_coll_id_3 =%d, test_coll_id_6=%d,test_coll_id_7=%d \n",test_coll_id_1,test_coll_id_2,test_coll_id_3,test_coll_id_6, test_coll_id_7);// Test
+						break; // Or handle error gracefully
+					}
+
+					mlgi_n = point_list[mlrp_n];
+					neg_depth = depths[mlgi_n];
+					neg_var = look_at_var_arr[mlgi_n];
+					con_o_n = conic_opacity[mlgi_n];
+					xy = points_xy_image[mlgi_n];
+
+					// Untile now ok
+					
+					// Test
+					// if (point_list[mlrp_n] < 0 || point_list[mlrp_n] >= P)
+					// {
+					// 	printf("point_list[mlrp_n] out of bounds: %d\n", point_list[mlrp_n]);
+					// 	break;
+					// }
+					// // above
+					// if (depths == nullptr || look_at_var_arr == nullptr || conic_opacity == nullptr)
+					// {
+					// 	printf("Invalid pointer detected!\n");
+					// 	return;
+					// }
+					// if (mlgi_n < 0 || mlgi_n >= P) // Replace `max_gaussians` with the valid size
+					// {
+					// 	printf("mlgi_n out of bounds: %d\n", mlgi_n);
+					// 	break;
+					// }
+					
+					
+					
+					
+					// float sqrt_pos_var = (pos_var > 0) ? glm::sqrt(pos_var) : 0.0f;
+					// float sqrt_neg_var = (neg_var > 0) ? glm::sqrt(neg_var) : 0.0f;
+					// bellow
+					//bool cond = abs(pos_depth - neg_depth) > std_diff_coff * (glm::sqrt(pos_var) + glm::sqrt(neg_var) ) ;
+					
+					if (abs(pos_depth - neg_depth) > std_diff_coff * (glm::sqrt(pos_var) + glm::sqrt(neg_var)))//|| con_o_n.w > 0.0f) // not aligned with forward pass, n1,n2,p1,n3,n4,p2 if n1 and p2 in the range, we concider the effect, but here we dont?
 					{
 						mlrp_n++;
-						//printf(" pos_depth ,  neg_depth , glm::sqrt(pos_var) ,  glm::sqrt(neg_var), count_a = %f, %f, %f, %f, %d \n",pos_depth, neg_depth,glm::sqrt(pos_var),glm::sqrt(neg_var), a);//Test
 						break;
 					}
-					
-					xy = points_xy_image[mlgi_n];
+
+					// mlrp_n--;// Test
+					// continue; // Test
+					// Above
+					mlrp_n--;
+
 					d = { xy.x - pixf.x, xy.y - pixf.y };
 					
-					mlrp_n --;
 					power = -0.5f * (con_o_n.x * d.x * d.x + con_o_n.z * d.y * d.y) - con_o_n.y * d.x * d.y;
 					G = exp(power);
 					neg_alpha = max(-0.99f, con_o.w * G);
 					if (power > 0.0f || neg_alpha > -1.0f / 255.0f)
-						continue;
+						{ 
+							// if (mlrp_n > range.x) mlrp_n --; // Test
+						continue;}
 					T_final_neg = T_final_neg*(1 + neg_alpha);		
+					
 				}
+				//continue;// Test issue above
 				
 				int lrp_p = closest_pos_range_idx_ptr; 	// loop pos gauss range index pointer
 				int lrp_n = mlrp_n;						// loop neg gauss range index pointer
@@ -761,7 +889,7 @@ renderCUDA(
 				int dlaa_p = closest_pos_pointer - 1;	// Possitive dL_dAccumAlpha pointer (index)
 				
 				int c = 0; // Test
-				printf("mlrp_n = %d",mlrp_n);
+				
 				// For each neg gauss (g0) starting from left (least) updating gradians of neg gauss starting from the closest neg gauss (to pos gauss) to it (g0), 
 				// w.r.t the positive gaussians in it's (g0) range
 				while(mlrp_n <= closest_neg_range_idx_ptr)
@@ -772,6 +900,11 @@ renderCUDA(
 					// 	printf("closest_neg_range_idx_ptr = %d, mlrp_n =%d",closest_neg_range_idx_ptr, mlrp_n);
 					// }
 					// c++;
+
+					if (mlrp_n > closest_neg_range_idx_ptr)// For safety
+					{
+						break;
+					}
 
 
 					lrp_p = lr_pin_p;
@@ -792,13 +925,19 @@ renderCUDA(
 					int dd = 0; // Test
 					// Socond loop to loop through positive gauss until the corresponding limit and mark the pin
 					// mpr is the pos gauss pointer in range. This pos gauss is the last (with max distance) in the active range of the closest neg gauss (closest to pos gausses) 
-					while (lrp_p <= mpr)	
+					// When dlaa_p comming back from the cycle, it should not pass closest_pos_pointer again (going more than cycle otherwise)
+					while (lrp_p <= mpr && dlaa_p != closest_pos_pointer)	
 					{	
 						// Test
 						// if (dd>100){	
 						// 	printf("Loop_4_d = %d",dd);
 						// }
 						// dd++;
+
+						if (lrp_p > mpr || dlaa_p == closest_pos_pointer)	// For safety
+						{
+							break;
+						}
 
 
 						lgi_p = point_list[lrp_p];
@@ -846,7 +985,10 @@ renderCUDA(
 							// }
 							// e++;
 
-
+							if (lrp_n > closest_neg_range_idx_ptr)// For safety
+							{
+								break;
+							}
 
 							lgi_n = point_list[lrp_n];
 							lrp_n ++;
@@ -919,7 +1061,6 @@ renderCUDA(
 			for (int i = 0; i < C; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
-
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
@@ -1028,6 +1169,7 @@ void BACKWARD::render(
 	const dim3 grid, const dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
+	int P, // Code by lathika Test
 	int W, int H,
 	const float* bg_color,
 	const bool* ctn_gauss_mask, // Code by lathika
@@ -1053,6 +1195,7 @@ void BACKWARD::render(
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
 		point_list,
+		P, 	// Code by lathika Test
 		W, H,
 		bg_color,
 		ctn_gauss_mask, // Code by lathika
@@ -1070,6 +1213,8 @@ void BACKWARD::render(
 		dL_dopacity,
 		dL_dcolors
 		);
+
+	gpuErrorchk(cudaDeviceSynchronize()); // Code by lathika
 
 	gpuErrorchk(cudaFree(pos_dL_dAcummApha_arr));
 }
