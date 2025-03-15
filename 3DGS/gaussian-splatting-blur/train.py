@@ -320,7 +320,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         im_new = render_pkg["render"]
                         save_torch_image_3D(im_new, f"/home/lathika/Workspace/test/Dump/Dump_blur/images/output_new_angle__{iteration+i}.jpg")
                     
-                    break
+                    #break
 
             # Code by lathika
             densify_func(dataset, opt, iteration, gaussians, visibility_filter, viewspace_point_tensor, scene, radii)
