@@ -321,12 +321,12 @@ def min_depth_and_idx(depth_arr, means_arr, gaussian_index_tensor):
     # Again clamping to make sure no out of bounds
     y_min = min_coords[:,0].clamp(0, H-1)
     x_min = min_coords[:,1].clamp(0, W-1)
-    # Mask
+    # Mask - test can remove
     mask = torch.zeros_like(depth_arr, dtype=torch.bool)
     mask[y_min, x_min] = True
     # Index_values
     gauss_idx_vals =  gaussian_index_tensor[y_min,x_min]
-    return min_vals, gauss_idx_vals ,mask # ,min_idx 
+    return min_vals, gauss_idx_vals ,mask 
 
 # Final function for 3d original points and corresponding gaussian index array
 

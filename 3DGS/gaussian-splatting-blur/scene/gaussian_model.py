@@ -473,12 +473,14 @@ class GaussianModel:
         self.denom[update_filter] += 1
 
     # Code by lathika - Test
+    """
     def replicate_max_row_3d(self, tensor):
         a, b, c = tensor.shape
         max_row = torch.max(tensor, dim=0).values  # Find the maximum row (b, c)
         replicated_tensor = max_row.unsqueeze(0).repeat(a, 1, 1) #repeat the max row a times.
         return replicated_tensor
-
+    """
+        
     # Code by lathika
     def blur_densify(self, new_means_3d, related_gaussian_idx, new_scales, radii):  # Try to remove radii (not needed)
         new_xyz = new_means_3d #self._xyz[related_gaussian_idx]
