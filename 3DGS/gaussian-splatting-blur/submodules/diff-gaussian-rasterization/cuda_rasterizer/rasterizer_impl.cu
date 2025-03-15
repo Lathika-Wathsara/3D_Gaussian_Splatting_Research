@@ -217,6 +217,8 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	float* out_color,
 	float* depth,
+	float* depth_extract,	// Code by lathika
+	int* prom_gauss_idx,	// Code by lathika
 	bool antialiasing,
 	int* radii,
 	bool debug)
@@ -335,7 +337,10 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		geomState.depths,
-		depth), debug)
+		depth,
+		depth_extract,	// Code by lathika
+		prom_gauss_idx)	// Code by lathika
+		, debug)
 
 	return num_rendered;
 }

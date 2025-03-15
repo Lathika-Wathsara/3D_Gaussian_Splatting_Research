@@ -471,3 +471,37 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    # Code by lathika - Test
+    def replicate_max_row_3d(self, tensor):
+        a, b, c = tensor.shape
+        max_row = torch.max(tensor, dim=0).values  # Find the maximum row (b, c)
+        replicated_tensor = max_row.unsqueeze(0).repeat(a, 1, 1) #repeat the max row a times.
+        return replicated_tensor
+
+    # Code by lathika
+    def blur_densify(self, new_means_3d, related_gaussian_idx, new_scales, radii):  # Try to remove radii (not needed)
+        new_xyz = new_means_3d #self._xyz[related_gaussian_idx]
+        new_features_dc = self._features_dc[related_gaussian_idx]
+        new_features_rest = self._features_rest[related_gaussian_idx]
+        # Test
+        """
+        f_dc = self.replicate_max_row_3d(new_features_dc) 
+        f_r = self.replicate_max_row_3d(new_features_rest) 
+        new_features_dc = f_dc
+        new_features_rest = f_r
+        print(f"new_features_dc shape = {new_features_dc.shape}")
+        print(f"f_dc shape = {f_dc.shape}")
+        print(f"new_features_rest shape = {new_features_rest.shape}")
+        print(f"f_r shape = {f_r.shape}")
+        """
+        
+        new_opacities = self._opacity[related_gaussian_idx]
+        new_scaling = self.scaling_inverse_activation(new_scales) #self._scaling[related_gaussian_idx]
+        new_rotation = self._rotation[related_gaussian_idx]
+
+        self.tmp_radii = radii  # Raise an error without this but we dont need this
+        new_tmp_radii = self.tmp_radii[related_gaussian_idx]
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
+        

@@ -193,7 +193,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Transform point by projecting
 	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	float p_w = 1.0f / (p_hom.w + 0.0000001f);	// Note by lathika : p_hom.w = p_hom.z which is the depth
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
@@ -266,6 +266,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
+
+	// Code by lathika - test
+	//printf("real_xyz = %f %f %f, point_xy = %f %f, depth = %f ",p_orig.x, p_orig.y, p_orig.z, point_image.x, point_image.y, p_view.z);
+	//printf("0:%f, 1:%f, 2:%f, 3:%f, 4:%f, 5:%f ", cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -285,7 +289,9 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	const float* __restrict__ depths,
-	float* __restrict__ invdepth)
+	float* __restrict__ invdepth,
+	float* __restrict__ depth_extract,	// Code by lathika
+	int* __restrict__ prom_gauss_idx)	// Code by lathika
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -316,6 +322,9 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
+	float alpha_T = 0.0f;					// Code by lathika
+	float expected_depth_extract = 0.0f;	// Code by lathika
+	int expected_prom_gauss_idx = 0;		// Code by lathika
 
 	float expected_invdepth = 0.0f;
 
@@ -367,6 +376,14 @@ renderCUDA(
 				continue;
 			}
 
+			// Code by lathika
+			if (alpha_T < alpha * T){
+				expected_depth_extract = depths[collected_id[j]];
+				alpha_T = alpha * T;
+				expected_prom_gauss_idx = collected_id[j];
+			}
+
+
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
@@ -393,6 +410,9 @@ renderCUDA(
 
 		if (invdepth)
 		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
+
+		depth_extract[pix_id] = expected_depth_extract;		// Code by lathika
+		prom_gauss_idx[pix_id] = expected_prom_gauss_idx;	// Code by lathika
 	}
 }
 
@@ -409,7 +429,9 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* depths,
-	float* depth)
+	float* depth,
+	float* depth_extract,	// Code by lathika
+	int* prom_gauss_idx)	// Code by lathika
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -423,7 +445,9 @@ void FORWARD::render(
 		bg_color,
 		out_color,
 		depths, 
-		depth);
+		depth,
+		depth_extract,	// Code by lathika
+		prom_gauss_idx);	// Code by lathika
 }
 
 void FORWARD::preprocess(int P, int D, int M,

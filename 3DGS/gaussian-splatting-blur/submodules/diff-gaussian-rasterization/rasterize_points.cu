@@ -32,7 +32,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>	// Code by lathika - added 2 "torch::Tensor"
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -72,6 +72,12 @@ RasterizeGaussiansCUDA(
 
   out_invdepth = torch::full({1, H, W}, 0.0, float_opts).contiguous();
   out_invdepthptr = out_invdepth.data<float>();
+
+  // Code by lathika
+  torch::Tensor depth_extract = torch::full({1, H, W}, 0.0, float_opts).contiguous();	// Prominent gaussian depth
+  float* depth_extractptr = depth_extract.data<float>();
+  torch::Tensor prom_gauss_idx = torch::full({1, H, W}, 0, int_opts).contiguous();		// Prominent gaussian idx
+  int* prom_gauss_idxptr = prom_gauss_idx.data<int>();
 
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
   
@@ -116,11 +122,13 @@ RasterizeGaussiansCUDA(
 		prefiltered,
 		out_color.contiguous().data<float>(),
 		out_invdepthptr,
+		depth_extractptr, 	// Code by lathika
+		prom_gauss_idxptr, // Code by lathika
 		antialiasing,
 		radii.contiguous().data<int>(),
 		debug);
   }
-  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer, out_invdepth);
+  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer, out_invdepth, depth_extract, prom_gauss_idx);  // Code by lathika - Added "depth_extract" and "prom_gauss_idx"
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>

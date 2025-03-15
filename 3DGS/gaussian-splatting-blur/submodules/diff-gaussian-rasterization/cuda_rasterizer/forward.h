@@ -62,7 +62,9 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
 		float* depths,
-		float* depth);
+		float* depth,
+		float* depth_extract,	// Code by lathika
+		int* prom_gauss_idx);	// Code by lathika
 }
 
 

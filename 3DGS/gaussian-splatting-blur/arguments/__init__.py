@@ -56,7 +56,7 @@ class ModelParams(ParamGroup):
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
-        #self.ortho_gauss = False    # Code by lathika - orthogonal gaussians (with wavelets) method
+        self.ortho_gauss = False    # Code by lathika - orthogonal gaussians method
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -70,7 +70,7 @@ class PipelineParams(ParamGroup):
         self.compute_cov3D_python = False
         self.debug = False
         self.antialiasing = False
-        self.active_wavelets = False    # Code by lathika - orthogonal gaussians (with wavelets) method
+        #self.active_wavelets = False    # Code by lathika - orthogonal gaussians (with wavelets) method
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
