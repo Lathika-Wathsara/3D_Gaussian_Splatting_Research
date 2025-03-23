@@ -1,5 +1,9 @@
 # Code by lathika
 
+""""
+Downsampling the point cloud at dataset_readers.py in scene folder
+"""
+
 import torch
 import math 
 import torch.nn.functional as F
@@ -377,8 +381,9 @@ def get_world_scales(sigma, view_mat, tan_fovx, tan_fovy, means_3d, H, W):
     device = means_3d.device
     n = len(means_3d)
     p_hom = torch.cat((means_3d, torch.ones((n, 1), device = device)), dim=1)
-    cam_coord = (p_hom @ view_mat)[:,:3] #torch.bmm(p_hom.unsqueeze(1), torch.tile(view_mat.unsqueeze(0),(n,1,1))).squeeze()[:,:3]
-    depth = cam_coord[:,2]    # To get a 2D tensor (cam_coord[:,2] will give a 1D tensor)
+    cam_coord = (p_hom @ view_mat)[:,:3] 
+    epsilon = 1e-6                      # To prevent division by zero
+    depth = torch.clamp(cam_coord[:, 2], min=epsilon)    # To get a 2D tensor (cam_coord[:,2] will give a 1D tensor)
     focal_x, focal_y =  W/(2*tan_fovx), H/(2*tan_fovy)
     lim_x = 1.3* tan_fovx
     lim_y = 1.3* tan_fovy

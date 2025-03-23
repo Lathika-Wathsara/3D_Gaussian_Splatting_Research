@@ -149,7 +149,7 @@ def downsample_voxel_grid(point_cloud: BasicPointCloud, voxel_size: float) -> Ba
                            normals=np.asarray(downsampled_cloud.normals))
 
 
-def fetchPly(path, ortho_gauss):
+def fetchPly(path, ortho_gauss, voxel_size):    # Code by lathika - Added "ortho_gauss" and "voxel_size"
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
@@ -158,7 +158,7 @@ def fetchPly(path, ortho_gauss):
     #return BasicPointCloud(points=positions, colors=colors, normals=normals)
     # Code by lathika
     if ortho_gauss:
-        return downsample_voxel_grid(BasicPointCloud(points=positions, colors=colors, normals=normals), 0.05)   #0.05
+        return downsample_voxel_grid(BasicPointCloud(points=positions, colors=colors, normals=normals), voxel_size)   # voxel_size = 0.05
     else:
         return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
@@ -180,7 +180,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, depths, eval, train_test_exp, ortho_gauss, llffhold=8):   # Code by lathika - added ortho_gauss
+def readColmapSceneInfo(path, images, depths, eval, train_test_exp, ortho_gauss, voxel_size, llffhold=8):   # Code by lathika - added ortho_gauss and voxel_size
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -251,7 +251,7 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, ortho_gauss,
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
     try:
-        pcd = fetchPly(ply_path, ortho_gauss) # Code by lathika - added ortho_gauss
+        pcd = fetchPly(ply_path, ortho_gauss, voxel_size) # Code by lathika - added ortho_gauss and voxel_size
     except:
         pcd = None
 
@@ -308,7 +308,7 @@ def readCamerasFromTransforms(path, transformsfile, depths_folder, white_backgro
             
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, depths, eval, ortho_gauss, extension=".png"): # Code by lathika - added ortho_gauss
+def readNerfSyntheticInfo(path, white_background, depths, eval, ortho_gauss, voxel_size, extension=".png"): # Code by lathika - added ortho_gauss
 
     depths_folder=os.path.join(path, depths) if depths != "" else ""
     print("Reading Training Transforms")
@@ -335,7 +335,7 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, ortho_gauss, ext
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
-        pcd = fetchPly(ply_path, ortho_gauss)   # Code by lathika - added ortho_gauss
+        pcd = fetchPly(ply_path, ortho_gauss, voxel_size)   # Code by lathika - added ortho_gauss and voxel_size
     except:
         pcd = None
 

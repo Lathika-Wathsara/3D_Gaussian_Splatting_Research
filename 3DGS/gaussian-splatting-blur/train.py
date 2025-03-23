@@ -26,7 +26,7 @@ import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
+from arguments import ModelParams, PipelineParams, OptimizationParams, OptimizeBlurParams   # Code by lathika - added "OptimizeBlurParams"
 from utils.blur_utils import apply_gaussian_blur, detect_H_freq_with_DoG, save_torch_image_3D, save_torch_image_2D, apply_mag_kernel, get_3d_points_and_gaussian_index, get_world_scales # Code by lathika 
 import numpy as np # Code by lathika
 import cv2  # Code by lathika
@@ -74,7 +74,7 @@ def densify_func(dataset, opt, iteration, gaussians, visibility_filter, viewspac
             if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                 gaussians.reset_opacity()
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, bopt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):   # Code by lathika - added "bopt"
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -82,7 +82,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
-    scene = Scene(dataset, gaussians)   
+    scene = Scene(dataset, bopt, gaussians)   # Code by lathika - added "bopt"
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -153,17 +153,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         
         gt_image = viewpoint_cam.original_image.cuda()
+
         # Code by lathika
-        #opt.densify_until_iter = 20000   # Code by lathika, test for iteration 7000
         gt_original_img = gt_image
+        
         if dataset.ortho_gauss:
-            num_of_stages = 6
+
+            sigma_base = bopt.sigma_base
+            num_of_stages = bopt.num_of_stages
+            bsdp = bopt.blur_stage_divider_pow # 1
+
+            # For testing
+            if (iteration==1):
+                print(f"Margins = {[min( math.floor(((i/num_of_stages)**bsdp)*bopt.blur_until_iter) + 1, math.floor(((i/num_of_stages)**bsdp)*opt.iterations) + 1) for i in range(num_of_stages)]}")
+
             for i in range(1,num_of_stages):    # If there are 5 stages, we blur 4 times and last one is the original
-                low = min((i-1)*(opt.densify_until_iter - opt.densify_from_iter)//num_of_stages + opt.densify_from_iter, (i-1)*opt.iterations//num_of_stages + 1)
-                high = min(i*(opt.densify_until_iter - opt.densify_from_iter)//num_of_stages + opt.densify_from_iter, i*opt.iterations//num_of_stages + 1)
+                low = min( math.floor((((i-1)/num_of_stages)**bsdp)*bopt.blur_until_iter) + 1, math.floor((((i-1)/num_of_stages)**bsdp)*opt.iterations) + 1)    #min((i-1)*(opt.densify_until_iter - opt.densify_from_iter)//num_of_stages + opt.densify_from_iter, (i-1)*opt.iterations//num_of_stages + 1)
+                high = min( math.floor(((i/num_of_stages)**bsdp)*bopt.blur_until_iter) + 1, math.floor(((i/num_of_stages)**bsdp)*opt.iterations) + 1)   #min(i*(opt.densify_until_iter - opt.densify_from_iter)//num_of_stages + opt.densify_from_iter, i*opt.iterations//num_of_stages + 1)
                 if low <= iteration < high:
                     stage = i
-                    sigma = 2**(0.5*(num_of_stages-1-i))    # According to the SIFT paper, it is better to increase the sigma by root 2 times when incrementing
+                    sigma = sigma_base**(num_of_stages-1-i)    # According to the SIFT paper, it is better to increase the sigma by root 2 times when incrementing
                     gt_image, kernel_size = apply_gaussian_blur(gt_image, sigma)
                     # Test
                     if high - 1 <= iteration < high: #low <= iteration < low+1:
@@ -174,6 +183,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     break
                 else:
                     stage = num_of_stages   # No blurring
+                    low = min( math.floor((((num_of_stages-1)/num_of_stages)**bsdp)*bopt.blur_until_iter) + 1, math.floor((((num_of_stages-1)/num_of_stages)**bsdp)*opt.iterations) + 1)    
+                    high = min( bopt.blur_until_iter + 1, opt.iterations + 1)
 
         ##
         # Loss
@@ -286,18 +297,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Densification
             
             # Code by lathika
-            blur_densify_interval = 20#10 # Test, put this inside argument (opt) 
+            blur_densify_interval = bopt.blur_densify_interval #10 # Test, put this inside argument (opt) 
+            if (bopt.blur_densify_method ==1):
+                densify_low = low + math.floor((high-low)*bopt.blur_in_stage_densify_start_portion)
+                densify_high = low + math.floor((high-low)*bopt.blur_in_stage_densify_end_portion)
+            else:
+                densify_low = low + bopt.blur_in_stage_densify_start_after_iter
+                densify_high = low + bopt.blur_in_stage_densify_end_after_iter
+
             if dataset.ortho_gauss:
-                if (low <= iteration < low+100) and (iteration%blur_densify_interval == 0):#(low <= iteration < high) and (iteration%blur_densify_interval == 0):
-                    sigma_2 = 2**(0.5*(num_of_stages-stage))    # For testing, when stage ==1 sigma_2 will be 4*root(2), need to think more
-                                                                # This method will intriduce points at the edges and will reduce the number of residual points 
-                                                                # when compared with using the original rendered image with the blurred gt_image
-                    gt_image_2, kernel_size_2 = apply_gaussian_blur(gt_original_img, sigma_2)
-                    dog_image, results, out_image, kernel_size_vis = detect_H_freq_with_DoG(gt_image, gt_image_2, kernel_size) # image # Here gt_image_2 is a blurred gt_truth sith sigma is root(2) times bigger w.r.t gt_image
-                    print(f"results shape = {results.shape} at iteration = {iteration}")
+                if (bopt.blur_densify_until_stage>stage>1) and (densify_low <= iteration < densify_high) and (iteration%blur_densify_interval == 0):
+                    if (bopt.blur_with_rendered_image):
+                        image_compare = image
+                    else:
+                        sigma_2 = sigma_base**(num_of_stages-stage)    # For testing, when stage ==1 sigma_2 will be 4*root(2), need to think more
+                                                                    # This method will intriduce points at the edges and will reduce the number of residual points 
+                                                                    # when compared with using the original rendered image with the blurred gt_image
+                        gt_image_2, kernel_size_2 = apply_gaussian_blur(gt_original_img, sigma_2)
+                        image_compare = gt_image_2
+
+                    dog_image, results, out_image, kernel_size_vis = detect_H_freq_with_DoG(gt_image, image_compare, kernel_size) # image, gt_image_2 # Here gt_image_2 is a blurred gt_truth with sigma is root(2) [base sigma] times bigger w.r.t gt_image
+                    print(f"results shape = {results.shape} at iteration = {iteration} stage = {stage}")
                     depth_extract = render_pkg["depth_extract"].squeeze(0)
                     prom_gauss_idx = render_pkg["prom_gauss_idx"].squeeze(0)
-                    orig_coordinates, gaussian_indexes = get_3d_points_and_gaussian_index(depth_extract, prom_gauss_idx, results, viewpoint_cam.full_proj_transform, portion = 1) #0.1
+                    orig_coordinates, gaussian_indexes = get_3d_points_and_gaussian_index(depth_extract, prom_gauss_idx, results, viewpoint_cam.full_proj_transform, portion = bopt.residual_portion) #0.1
                     tanfovx, tanfovy = math.tan(viewpoint_cam.FoVx * 0.5), math.tan(viewpoint_cam.FoVy * 0.5)
                     H, W = depth_extract.shape
                     new_scales = get_world_scales(sigma, viewpoint_cam.world_view_transform, tanfovx, tanfovy, orig_coordinates,H, W)            
@@ -424,6 +447,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
+    bopt = OptimizeBlurParams(parser)   # Code by lathika
     pp = PipelineParams(parser)
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
@@ -447,7 +471,7 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), bopt.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)  # Code by lathika - added "bopt"
 
     # All done
     print("\nTraining complete.")

@@ -12,6 +12,7 @@
 from argparse import ArgumentParser, Namespace
 import sys
 import os
+import numpy as np  # Code by lathika
 
 class GroupParams:
     pass
@@ -100,6 +101,27 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")
+
+# Code by lathika - for testing and optimizing the parameters
+class OptimizeBlurParams(ParamGroup):
+    def __init__(self, parser):
+        self.voxel_size = 0.05
+        self.sigma_base = 2**0.5
+        self.num_of_stages = 6
+        self.blur_densify_until_stage = self.num_of_stages # - 1
+        self.blur_stage_divider_pow = np.exp(0.5) # (0 init) Test wth the range of [-2,2], 0 means, equal divides
+        self.blur_until_iter = 15_000   # Same as densify_until_iter for now, make this a very high value to ignore
+        self.blur_densify_interval = 20
+        self.blur_densify_method = 1    # Methods {1: densify ranges are decided by portions of the stage duration (ex: start densify after 0.1 and end after 0.5 from stage duration),
+                                        #          2: densify ranges are given as iterations (ex: start densify after 50 and end after 500 from stage start)}
+        self.blur_in_stage_densify_start_portion = 0
+        self.blur_in_stage_densify_end_portion = 0.1
+        self.blur_in_stage_densify_start_after_iter = 0
+        self.blur_in_stage_densify_end_after_iter = 100
+        self.blur_with_rendered_image = False
+        self.residual_portion = 10
+        super().__init__(parser, "Blur Optimization Parameters")
+        
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]
